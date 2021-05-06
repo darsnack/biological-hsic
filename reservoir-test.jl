@@ -1,4 +1,5 @@
 using DifferentialEquations
+using Distributions
 using GLMakie
 
 ##
