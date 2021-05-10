@@ -4,7 +4,7 @@ struct LowPassFilter{T, S}
 end
 
 function (lpf::LowPassFilter)(f, Δt)
-    lpf.f̄ .= (1 - Δt / lpf.τ) * lpf.f̄ + (Δt / τ) * f
+    lpf.f̄ .= (1 - Δt / lpf.τ) * lpf.f̄ .+ (Δt / lpf.τ) * f
 
     return lpf.f̄
 end
