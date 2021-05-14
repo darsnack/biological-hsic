@@ -12,7 +12,7 @@ end
 function Reservoir{T}(nin, nout, nhidden; τ = 10e-3, λ = 1.2, sparsity = 0.1) where T
     # network parameters
     Dp = Bernoulli(sparsity) # probability of recurrent connection
-    Dr = Normal(0, 1 / (sparsity * nhidden)) # weight distribution of recurrent connection
+    Dr = Normal(0, sqrt(1 / (sparsity * nhidden))) # weight distribution of recurrent connection
     Din = Uniform(-1, 1) # weight distribution of input connection
     Dfb = Uniform(-1, 1) # weight distribution of feedback connection
 
@@ -51,8 +51,6 @@ nin(reservoir::Reservoir) = size(reservoir.Win, 2)
 nout(reservoir::Reservoir) = size(reservoir.Wout, 1)
 nhidden(reservoir::Reservoir) = size(reservoir.Wfb, 1)
 
-state(reservoir::Reservoir{T, S}) where {T, S} = adapt(S, zeros(nhidden(reservoir)))
-
 cpu(reservoir::Reservoir) = Reservoir(adapt(Array, reservoir.Wr),
                                       adapt(Array, reservoir.Win),
                                       adapt(Array, reservoir.Wfb),
@@ -72,97 +70,74 @@ gpu(reservoir::Reservoir) = Reservoir(adapt(CuArray, reservoir.Wr),
                                       reservoir.τ,
                                       reservoir.λ)
 
-struct ReservoirCache{T}
+struct ReservoirState{T}
+    u::T
     r::T
     z::T
 end
-ReservoirCache(reservoir::Reservoir{T}) where T =
-    ReservoirCache(similar(reservoir.Wr, nhidden(reservoir)),
+ReservoirState(reservoir::Reservoir{T}) where T =
+    ReservoirState(fill!(similar(reservoir.Wr, nhidden(reservoir)), zero(T)),
+                   similar(reservoir.Wr, nhidden(reservoir)),
                    similar(reservoir.Wr, nout(reservoir)))
 
-# CPU implementation
-function (reservoir::Reservoir{T, S})(du, u, p, t) where {T, S<:Array}
-    input, cache = p
-
+function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = true)
     # get hidden neuron firing rate
-    reservoir.ξhidden!(cache.r)
-    @avx cache.r .+= reservoir.f.(u)
-    
+    reservoir.ξhidden!(state.r)
+    state.r .+= reservoir.f.(state.u)
+
     # get output neuron firing rate
-    reservoir.ξ!(cache.z)
-    @avx cache.z .+= reservoir.Wout * cache.r
-    
+    if explore
+        reservoir.ξ!(state.z)
+        state.z .+= reservoir.Wout * state.r
+    else
+        state.z .= reservoir.Wout * state.r
+    end
+
     # update du
-    @avx du .= (-u .+ reservoir.λ .* reservoir.Wr * cache.r .+
-                      reservoir.Win * input(t) .+
-                      reservoir.Wfb * cache.z) ./ reservoir.τ
+    state.u .+= Δt .* (-state.u .+ reservoir.λ * reservoir.Wr * state.r .+
+                                   reservoir.Win * input(t) .+
+                                   reservoir.Wfb * state.z) ./ reservoir.τ
 
-    return du
-end
-# GPU implementation
-function (reservoir::Reservoir{T})(du, u, p, t) where T
-    input, cache = p
-
-    # get hidden neuron firing rate
-    reservoir.ξhidden!(cache.r)
-    cache.r .+= reservoir.f.(u)
-    
-    # get output neuron firing rate
-    reservoir.ξ!(cache.z)
-    cache.z .+= reservoir.Wout * cache.r
-    
-    # update du
-    du .= (-u .+ reservoir.λ .* reservoir.Wr * cache.r .+
-                 reservoir.Win * input(t) .+
-                 reservoir.Wfb * cache.z) ./ reservoir.τ
-
-    return du
+    return state
 end
 
-struct RFORCE{T, S, R}
-    η::T
+struct RMHebb{F, S, R}
+    η::F
     zlpf::S
     Plpf::R
 end
-function RFORCE{T}(η, τ, N) where T
+function RMHebb(T, η, τ, N)
     zlpf = LowPassFilter{T, Vector{T}}(τ, zeros(T, N))
     Plpf = LowPassFilter{T, Vector{T}}(τ, zeros(T, 1))
 
-    RFORCE{T, typeof(zlpf), typeof(Plpf)}(η, zlpf, Plpf)
+    RMHebb{typeof(η), typeof(zlpf), typeof(Plpf)}(η, zlpf, Plpf)
 end
-RFORCE(reservoir::Reservoir{T}; η, τ) where {T} = RFORCE{T}(η, τ, nout(reservoir))
+RMHebb(reservoir::Reservoir{T}; η, τ) where {T} = RMHebb(T, η, τ, nout(reservoir))
 
-cpu(learner::RFORCE) = RFORCE(learner.η,
+cpu(learner::RMHebb) = RMHebb(learner.η,
                               LowPassFilter(learner.zlpf.τ, adapt(Array, learner.zlpf.f̄)),
                               LowPassFilter(learner.Plpf.τ, adapt(Array, learner.Plpf.f̄)))
-gpu(learner::RFORCE) = RFORCE(learner.η,
+gpu(learner::RMHebb) = RMHebb(learner.η,
                               LowPassFilter(learner.zlpf.τ, adapt(CuArray, learner.zlpf.f̄)),
                               LowPassFilter(learner.Plpf.τ, adapt(CuArray, learner.Plpf.f̄)))
 
-# CPU implementation
-function (learner::RFORCE)(reservoir::Reservoir{T, S}, r, z, f, Δt) where {T, S<:Array}
-    P = -norm(z .- f)^2
+function (learner::RMHebb)(reservoir::Reservoir, state::ReservoirState, f, t, Δt)
+    P = -sum((state.z .- f(t)).^2)
     P̄ = learner.Plpf(P, Δt)
-    M = adapt(typeof(z), @. P > P̄)
+    M = adapt(typeof(state.z), @. P > P̄)
 
-    z̄ = learner.zlpf(z, Δt)
+    z̄ = learner.zlpf(state.z, Δt)
 
-    @avx reservoir.Wout .+= learner.η * (z .- z̄) .* M * transpose(r)
+    reservoir.Wout .+= learner.η(t) * (state.z .- z̄) .* M * transpose(state.r)
 
     return reservoir
 end
-# GPU implementation
-function (learner::RFORCE)(reservoir::Reservoir, r, z, f, Δt)
-    P = -norm(z .- f)^2
-    P̄ = learner.Plpf(P, Δt)
-    M = adapt(typeof(z), @. P > P̄)
 
-    z̄ = learner.zlpf(z, Δt)
+step!(reservoir::Reservoir, state::ReservoirState, input, t, Δt; explore = true) =
+    reservoir(state, input, t, Δt; explore = explore)
+function step!(reservoir::Reservoir, state::ReservoirState, learner::RMHebb, input, f, t, Δt; explore = true)
+    step!(reservoir, state, input, t, Δt; explore = explore)
+    learner(reservoir, state, f, t, Δt)
 
-    reservoir.Wout .+= learner.η * (z .- z̄) .* M * transpose(r)
-
-    return reservoir
+    return state
 end
-(learner::RFORCE)(integrator::DifferentialEquations.DiffEqBase.DEIntegrator, f, Δt) =
-    learner(integrator.f.f, integrator.p.cache.r, integrator.p.cache.z, f(integrator.t), Δt)
-    
