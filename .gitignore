@@ -25,3 +25,6 @@ docs/site/
 
 # ignore VS Code specific files
 .vscode/
+
+# ignore output
+output/
