@@ -123,12 +123,12 @@ gpu(learner::RMHebb) = RMHebb(learner.η,
 
 function (learner::RMHebb)(reservoir::Reservoir, state::ReservoirState, f, t, Δt)
     P = -sum((state.z .- f(t)).^2)
-    P̄ = learner.Plpf(P, Δt)
-    M = adapt(typeof(state.z), @. P > P̄)
+    P̄ = learner.Plpf(P, Δt) |> cpu
+    M = Int(P > only(P̄))
 
     z̄ = learner.zlpf(state.z, Δt)
 
-    reservoir.Wout .+= learner.η(t) * (state.z .- z̄) .* M * transpose(state.r)
+    reservoir.Wout .+= learner.η(t) * M * (state.z .- z̄) * transpose(state.r)
 
     return reservoir
 end

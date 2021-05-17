@@ -1143,6 +1143,11 @@ git-tree-sha1 = "53915e50200959667e78a92a418594b428dffddf"
 uuid = "1cfade01-22cf-5700-b092-accc4b62d6e1"
 version = "0.4.1"
 
+[[Unzip]]
+git-tree-sha1 = "8bb24303ec7049458edba289cae4c41198e3a613"
+uuid = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
+version = "0.1.0"
+
 [[VectorizationBase]]
 deps = ["ArrayInterface", "Hwloc", "IfElse", "Libdl", "LinearAlgebra", "Static"]
 git-tree-sha1 = "c258467e1a3473e328c8a9109efcce845723593e"
