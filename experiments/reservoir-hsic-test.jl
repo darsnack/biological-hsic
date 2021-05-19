@@ -23,39 +23,39 @@ target = gpu
 
 ## PROBLEM PARAMETERS
 
-const τ = 50f-3 # LIF time constant
-const λ = 1.7 # chaotic level
-const τavg = 10f-3 # signal smoothing constant
-const Tinit = 50f0 # warmup time
-const Ttrain = 1000f0 # training time
-const Ttest = 100f0 # testing time
-const Δt = 1f-3 # simulation time step
-const Nsamples = 100 # number of data samples
-const Δtsample = 50f-3 # time to present each data sample
-const bs = 6 # effective batch size
+τ = 50f-3 # LIF time constant
+λ = 1.7 # chaotic level
+τavg = 10f-3 # signal smoothing constant
+Tinit = 50f0 # warmup time
+Ttrain = 500f0 # training time
+Ttest = 100f0 # testing time
+Δt = 1f-3 # simulation time step
+Nsamples = 100 # number of data samples
+Δtsample = 50f-3 # time to present each data sample
+bs = 6 # effective batch size
 # learning rate
 η(t)::Float32 = (t > Tinit && t <= Tinit + Ttrain) ?
                     1f-4 / (1 + (t - Tinit) / 20f0) :
                     zero(Float32)
 
 # network sizes
-const Nx = 2
-const Ny = 1
-const Nz = 2
-const Nin = Nx + Ny + Nz # needs to be >= 1 even if no input
-const Nhidden = 2000
-const Nout = 1
+Nx = 2
+Ny = 1
+Nz = 4
+Nin = Nx + Ny + Nz # needs to be >= 1 even if no input
+Nhidden = 1000
+Nout = Nz
 
 # input data
-const X = rand(Float32, Nx, Nsamples) |> target
-const Y = rand(Float32, Ny, Nsamples) |> target
-const Z = rand(Float32, Nz, Nsamples) |> target
-const σx = estσ(X)
-const σy = estσ(Y)
-const σz = estσ(Z)
-const Kx = [k_hsic(x, x̂; σ = σx) for x in eachcol(X), x̂ in eachcol(X)]
-const Ky = [k_hsic(y, ŷ; σ = σy) for y in eachcol(Y), ŷ in eachcol(Y)]
-const Kz = [k_hsic(z, ẑ; σ = σz) for z in eachcol(Z), ẑ in eachcol(Z)]
+X = rand(Float32, Nx, Nsamples) |> target
+Y = rand(Float32, Ny, Nsamples) |> target
+Z = rand(Float32, Nz, Nsamples) |> target
+σx = estσ(X)
+σy = estσ(Y)
+σz = estσ(Z)
+Kx = [k_hsic(x, x̂; σ = σx) for x in eachcol(X), x̂ in eachcol(X)]
+Ky = [k_hsic(y, ŷ; σ = σy) for y in eachcol(Y), ŷ in eachcol(Y)]
+Kz = [k_hsic(z, ẑ; σ = σz) for z in eachcol(Z), ẑ in eachcol(Z)]
 
 # input signal
 timetoidx(t) = (t < 0) ? 1 : (Int(round(t / Δtsample)) % Nsamples) + 1
