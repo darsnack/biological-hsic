@@ -10,7 +10,7 @@ struct Reservoir{T, S<:AbstractMatrix{T}, F, G, H}
     λ::T
 end
 function Reservoir{T}(nin, nout, nhidden;
-                      τ = 10e-3, λ = 1.2, sparsity = 0.1, noiselevel = 0.5) where T
+                      f = tanh, τ = 10e-3, λ = 1.2, sparsity = 0.1, noiselevel = 0.5) where T
     # network parameters
     Dp = Bernoulli(sparsity) # probability of recurrent connection
     Dr = Normal(0, sqrt(1 / (sparsity * nhidden))) # weight distribution of recurrent connection
@@ -34,9 +34,6 @@ function Reservoir{T}(nin, nout, nhidden;
     Win = convert.(T, rand(Din, nhidden, nin))
     Wfb = convert.(T, rand(Dfb, nhidden, nout))
     Wout = zeros(T, nout, nhidden)
-
-    # activation function
-    f = tanh
 
     S = typeof(Wr)
     F = typeof(ξhidden!)
@@ -76,10 +73,12 @@ struct ReservoirState{T}
     r::T
     z::T
 end
-ReservoirState(reservoir::Reservoir{T}) where T =
+ReservoirState(reservoir::Reservoir{T}) where {T} =
     ReservoirState(fill!(similar(reservoir.Wr, nhidden(reservoir)), zero(T)),
                    similar(reservoir.Wr, nhidden(reservoir)),
                    similar(reservoir.Wr, nout(reservoir)))
+
+state(reservoir::Reservoir) = ReservoirState(reservoir)
 
 function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = true)
     # get hidden neuron firing rate
@@ -96,7 +95,7 @@ function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = 
 
     # update du
     state.u .+= Δt .* (-state.u .+ reservoir.λ * reservoir.Wr * state.r .+
-                                   reservoir.Win * input(t) .+
+                                   reservoir.Win * input .+
                                    reservoir.Wfb * state.z) ./ reservoir.τ
 
     return state
@@ -136,7 +135,7 @@ function (learner::RMHebb)(reservoir::Reservoir, state::ReservoirState, f, t, Δ
 end
 
 step!(reservoir::Reservoir, state::ReservoirState, input, t, Δt; explore = true) =
-    reservoir(state, input, t, Δt; explore = explore)
+    reservoir(state, input(t), t, Δt; explore = explore)
 function step!(reservoir::Reservoir, state::ReservoirState, learner::RMHebb, input, f, t, Δt; explore = true)
     step!(reservoir, state, input, t, Δt; explore = explore)
     learner(reservoir, state, f, t, Δt)
