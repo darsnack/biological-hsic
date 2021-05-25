@@ -52,6 +52,9 @@ nout(encoder::RateEncoder) = size(encoder.data, 1)
 
 Base.eltype(encoder::RateEncoder) = typeof(encoder(0))
 
+cpu(encoder::RateEncoder) = RateEncoder(cpu(encoder.data), encoder.Δt)
+gpu(encoder::RateEncoder) = RateEncoder(gpu(encoder.data), encoder.Δt)
+
 function (encoder::RateEncoder)(t)
     Nsamples = length(encoder)
     i = (t < 0) ? 1 : (Int(round(t / encoder.Δt)) % Nsamples) + 1

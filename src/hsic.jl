@@ -5,8 +5,8 @@ function dist!(zs::AbstractMatrix, xs::AbstractMatrix, ys::AbstractMatrix)
     return zs
 end
 
-estσ(xs) = median(dist(x, x̂) for x in eachcol(xs), x̂ in eachcol(xs))
-estσ(xs, ys) = median(dist(z, ẑ) for z in eachcol(hcat(xs, ys)), ẑ in eachcol(hcat(xs, ys)))
+estσ(xs) = median(dist(xs, xs))
+estσ(xs, ys) = median(dist(xs, ys))
 
 k_hsic(x::AbstractVector, y::AbstractVector; σ) = exp(-dist(x, y) / (2 * σ^2))
 k_hsic(xs::AbstractMatrix, ys::AbstractMatrix; σ) =

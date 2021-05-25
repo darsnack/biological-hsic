@@ -32,12 +32,13 @@ Din = 2
 Dout = 1
 ϕ(x) = [tanh(x[1]), x[2]]
 W = [[1 -1]]
-data, W = generatedata(Din, Nsamples; Dx = Dx)
+data, _ = generatedata(Din, Nsamples; Dx = Dx, ϕ = [ϕ])
 data = (Float32.(data[1]), Float32.(data[2]))
 
 ## EXPERIMENT SETUP
 
-recording = dense_test(data, target;
+layer_config = [Din => Din, Din => Dout]
+recording = chain_test(data, layer_config, target;
                        τff = τff,
                        τr = τr,
                        λ = λ,
@@ -59,27 +60,30 @@ recording = dense_test(data, target;
 
 fig = Figure()
 
-dataplt = fig[1, 1] = Axis(fig; title = "Data Distribution", xlabel = "x₁", ylabel = "x₂")
+dataplt = fig[1, 1:2] = Axis(fig; title = "Data Distribution", xlabel = "x₁", ylabel = "x₂")
 pts = classificationplot!(dataplt, data)
-decisionboundary!(dataplt, W[1])
+decisionboundary!(dataplt, W[1]; ϕ = ϕ)
 axislegend(dataplt, pts, ["Class 1", "Class 2"]; position = :rt)
 
-wplt = fig[1, 2] = Axis(fig; title = "Weights", xlabel = "Time (sec)", ylabel = "Value")
-lines!(wplt, recording.t, recording.w1 ./ recording.w2; label = "W₁ / W₂", color = :blue)
-hlines!(wplt, [W[1][1] / W[1][2]]; label = "W₁ / W₂ (true)", color = :blue, linestyle = :dash)
-xlims!(wplt, Tinit + Tpre, Tinit + Tpre + nepochs * Nsamples * Δtsample)
-ylims!(wplt, W[1][1] / W[1][2] - 2, W[1][1] / W[1][2] + 2)
-fig[1, 3] = Legend(fig, wplt)
-
-errplt = fig[2, :] = Axis(fig; title = "HSIC Objective",
-                               xlabel = "Time (sec)",
-                               ylabel = "Error")
-lines!(errplt, recording.t, recording.lossx; label = "HSIC(X, Z)", color = :green)
-lines!(errplt, recording.t, recording.lossy; label = "HSIC(Y, Z)", color = :red)
-lines!(errplt, recording.t, recording.lossx .- γ .* recording.lossy;
+errplt1 = fig[2, 1] = Axis(fig; title = "HSIC Objective (Layer 1)",
+                                xlabel = "Time (sec)",
+                                ylabel = "Error")
+lines!(errplt1, recording.t, recording.lossxs[1]; label = "HSIC(X, Z)", color = :green)
+lines!(errplt1, recording.t, recording.lossys[1]; label = "HSIC(Y, Z)", color = :red)
+lines!(errplt1, recording.t, recording.lossxs[1] .- γ .* recording.lossys[1];
        label = "HSIC(X, Z) - $γ HSIC(Y, Z)", color = :blue)
-vlines!(errplt, [Tinit + Tpre]; color = :black, linestyle = :dash)
-xlims!(errplt, Tinit + Tpre - 10, Tinit + Tpre + nepochs * Nsamples * Δtsample)
-fig[3, :] = Legend(fig, errplt; orientation = :horizontal, tellheight = true)
+vlines!(errplt1, [Tinit + Tpre]; color = :black, linestyle = :dash)
+xlims!(errplt1, Tinit + Tpre - 10, Tinit + Tpre + nepochs * Nsamples * Δtsample)
 
-save("output/lif-dense-test.pdf", fig)
+errplt2 = fig[2, 2] = Axis(fig; title = "HSIC Objective (Layer 2)",
+                                xlabel = "Time (sec)",
+                                ylabel = "Error")
+lines!(errplt2, recording.t, recording.lossxs[2]; label = "HSIC(X, Z)", color = :green)
+lines!(errplt2, recording.t, recording.lossys[2]; label = "HSIC(Y, Z)", color = :red)
+lines!(errplt2, recording.t, recording.lossxs[2] .- γ .* recording.lossys[2];
+       label = "HSIC(X, Z) - $γ HSIC(Y, Z)", color = :blue)
+vlines!(errplt2, [Tinit + Tpre]; color = :black, linestyle = :dash)
+xlims!(errplt2, Tinit + Tpre - 10, Tinit + Tpre + nepochs * Nsamples * Δtsample)
+fig[3, :] = Legend(fig, errplt2; orientation = :horizontal, tellheight = true)
+
+save("output/lif-chain-test.pdf", fig)

@@ -1,16 +1,16 @@
-struct Reservoir{T, S<:AbstractMatrix{T}, F, G, H}
+struct Reservoir{T, S<:AbstractMatrix{T}, F, G}
     Wr::S
     Win::S
     Wfb::S
     Wout::S
     ξhidden!::F
     ξ!::G
-    f::H
     τ::T
     λ::T
 end
 function Reservoir{T}(nin, nout, nhidden;
-                      f = tanh, τ = 10e-3, λ = 1.2, sparsity = 0.1, noiselevel = 0.5) where T
+                      τ = 10e-3, λ = 1.2,
+                      sparsity = 0.1, noisehidden = 0.05, noiseout = 0.5) where T
     # network parameters
     Dp = Bernoulli(sparsity) # probability of recurrent connection
     Dr = Normal(0, sqrt(1 / (sparsity * nhidden))) # weight distribution of recurrent connection
@@ -20,12 +20,12 @@ function Reservoir{T}(nin, nout, nhidden;
     # noise distributions
     function ξhidden!(dest) # Uniform(-0.05, 0.05)
         rand!(dest)
-        @. dest = 0.1 * dest - 0.05
+        @. dest = 2 * noisehidden * dest - noisehidden
         return dest
     end
     function ξ!(dest) # Uniform(-0.5, 0.5)
         rand!(dest)
-        @. dest = 2 * noiselevel * dest - noiselevel
+        @. dest = 2 * noiseout * dest - noiseout
         return dest
     end
 
@@ -38,11 +38,10 @@ function Reservoir{T}(nin, nout, nhidden;
     S = typeof(Wr)
     F = typeof(ξhidden!)
     G = typeof(ξ!)
-    H = typeof(f)
 
-    Reservoir{T, S, F, G, H}(Wr, Win, Wfb, Wout, ξhidden!, ξ!, f, τ, λ)
+    Reservoir{T, S, F, G}(Wr, Win, Wfb, Wout, ξhidden!, ξ!, τ, λ)
 end
-Reservoir{T}(inout::Pair, nhidden; kwargs...) where T =
+Reservoir{T}(inout::Pair, nhidden; kwargs...) where {T} =
     Reservoir{T}(inout[1], inout[2], nhidden; kwargs...)
 
 nin(reservoir::Reservoir) = size(reservoir.Win, 2)
@@ -55,7 +54,6 @@ cpu(reservoir::Reservoir) = Reservoir(adapt(Array, reservoir.Wr),
                                       adapt(Array, reservoir.Wout),
                                       reservoir.ξhidden!,
                                       reservoir.ξ!,
-                                      reservoir.f,
                                       reservoir.τ,
                                       reservoir.λ)
 gpu(reservoir::Reservoir) = Reservoir(adapt(CuArray, reservoir.Wr),
@@ -64,7 +62,6 @@ gpu(reservoir::Reservoir) = Reservoir(adapt(CuArray, reservoir.Wr),
                                       adapt(CuArray, reservoir.Wout),
                                       reservoir.ξhidden!,
                                       reservoir.ξ!,
-                                      reservoir.f,
                                       reservoir.τ,
                                       reservoir.λ)
 
@@ -83,7 +80,7 @@ state(reservoir::Reservoir) = ReservoirState(reservoir)
 function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = true)
     # get hidden neuron firing rate
     reservoir.ξhidden!(state.r)
-    state.r .+= reservoir.f.(state.u)
+    state.r .+= tanh.(state.u)
 
     # get output neuron firing rate
     if explore
@@ -94,9 +91,10 @@ function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = 
     end
 
     # update du
-    state.u .+= Δt .* (-state.u .+ reservoir.λ * reservoir.Wr * state.r .+
-                                   reservoir.Win * input .+
-                                   reservoir.Wfb * state.z) ./ reservoir.τ
+    du = reservoir.λ * reservoir.Wr * state.r
+    du .+= reservoir.Win * input
+    du .+= reservoir.Wfb * state.z
+    state.u .+= Δt .* (-state.u .+ du) ./ reservoir.τ
 
     return state
 end
@@ -122,20 +120,19 @@ gpu(learner::RMHebb) = RMHebb(learner.η,
                               LowPassFilter(learner.Plpf.τ, adapt(CuArray, learner.Plpf.f̄)))
 
 function (learner::RMHebb)(reservoir::Reservoir, state::ReservoirState, f, t, Δt)
-    ft = adapt(typeof(state.z), f(t))
-    P = -sum((state.z .- ft).^2)
+    P = - @reduce sum(i) (state.z[i] - f[i])^2
     P̄ = learner.Plpf(P, Δt) |> cpu
     M = Int(P > only(P̄))
 
     z̄ = learner.zlpf(state.z, Δt)
 
-    reservoir.Wout .+= learner.η(t) * M * (state.z .- z̄) * transpose(state.r)
+    reservoir.Wout .+= learner.η(t) .* M .* (state.z - z̄) * transpose(state.r)
 
     return reservoir
 end
 
 step!(reservoir::Reservoir, state::ReservoirState, input, t, Δt; explore = true) =
-    reservoir(state, input(t), t, Δt; explore = explore)
+    reservoir(state, input, t, Δt; explore = explore)
 function step!(reservoir::Reservoir, state::ReservoirState, learner::RMHebb, input, f, t, Δt; explore = true)
     step!(reservoir, state, input, t, Δt; explore = explore)
     learner(reservoir, state, f, t, Δt)

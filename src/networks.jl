@@ -24,8 +24,8 @@ end
 nin(layer::LIFDense) = size(layer.W, 2)
 nout(layer::LIFDense) = size(layer.W, 1)
 
-cpu(x::LIFDense) = LIFDense(x.τ, adapt(Array, x.W), layer.ξ!)
-gpu(x::LIFDense) = LIFDense(x.τ, adapt(CuArray, x.W), layer.ξ!)
+cpu(x::LIFDense) = LIFDense(x.τ, adapt(Array, x.W), x.ξ!)
+gpu(x::LIFDense) = LIFDense(x.τ, adapt(CuArray, x.W), x.ξ!)
 
 struct LIFDenseState{T}
     u::T
@@ -49,3 +49,36 @@ function (layer::LIFDense)(state::LIFDenseState, input, t, Δt)
 end
 
 step!(layer::LIFDense, state::LIFDenseState, input, t, Δt) = layer(state, input, t, Δt)
+
+struct LIFChain{T}
+    layers::T
+end
+
+LIFChain(layers...) = LIFChain(layers)
+
+Base.getindex(chain::LIFChain, i) = getindex(chain.layers, i)
+Base.length(chain::LIFChain) = length(chain.layers)
+Base.first(chain::LIFChain) = first(chain.layers)
+Base.last(chain::LIFChain) = last(chain.layers)
+Base.iterate(chain::LIFChain) = iterate(chain.layers)
+Base.iterate(chain::LIFChain, state) = iterate(chain.layers, state)
+Base.lastindex(chain::LIFChain) = lastindex(chain.layers)
+
+nin(chain::LIFChain) = nin(first(chain))
+nout(chain::LIFChain) = nout(last(chain))
+
+cpu(x::LIFChain) = LIFChain(cpu.(x.layers)...)
+gpu(x::LIFChain) = LIFChain(gpu.(x.layers)...)
+
+state(chain::LIFChain) = Tuple([state(layer) for layer in chain])
+
+function _applychain(layers::Tuple, states, x, t, Δt)
+    y = first(layers)(first(states), x, t, Δt)
+
+    return (y, _applychain(Base.tail(layers), Base.tail(states), y, t, Δt)...)
+end
+_applychain(layers::Tuple{}, states, x, t, Δt) = ()
+
+(chain::LIFChain)(states, input, t, Δt) = _applychain(chain.layers, states, input, t, Δt)
+
+step!(layer::LIFChain, states, input, t, Δt) = layer(states, input, t, Δt)
