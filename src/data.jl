@@ -55,9 +55,10 @@ Base.eltype(encoder::RateEncoder) = typeof(encoder(0))
 cpu(encoder::RateEncoder) = RateEncoder(cpu(encoder.data), encoder.Δt)
 gpu(encoder::RateEncoder) = RateEncoder(gpu(encoder.data), encoder.Δt)
 
-function (encoder::RateEncoder)(t)
-    Nsamples = length(encoder)
-    i = (t < 0) ? 1 : (Int(round(t / encoder.Δt)) % Nsamples) + 1
+function rateencode(x, t; Δt)
+    i = (t < 0) ? 1 : (Int(round(t / Δt)) % nobs(x)) + 1
 
-    return encoder.data[:, i]
+    return getobs(x, i)
 end
+
+(encoder::RateEncoder)(t) = rateencode(encoder.data, t; Δt = encoder.Δt)

@@ -10,6 +10,18 @@ _zero(::Type{T}, dims...) where {T<:AbstractArray} = adapt(T, zeros(eltype(T), d
 
 trange(start, Δt, span) = start:Δt:(start + span - Δt)
 
+# inplace push! for CircularBuffer
+@inline function push_inplace!(cb::CircularBuffer, data)
+    # if full, increment and overwrite, otherwise push
+    if cb.length == cb.capacity
+        cb.first = (cb.first == cb.capacity ? 1 : cb.first + 1)
+    else
+        cb.length += 1
+    end
+    @inbounds cb.buffer[DataStructures._buffer_index(cb, cb.length)] .= data
+    return cb
+end
+
 ## plot utils
 
 """

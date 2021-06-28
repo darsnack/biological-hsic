@@ -27,7 +27,7 @@ target = gpu
 ## PROBLEM PARAMETERS
 
 τ = 50f-3 # LIF time constant
-λ = 2.2 # chaotic level
+λ = 1.7 # chaotic level
 τavg = 5f-3 # signal smoothing constant
 Tinit = 50f0 # warmup time
 Ttrain = 500f0 # training time
@@ -42,9 +42,9 @@ bs = 6 # effective batch size
                 zero(Float32)
 
 # network sizes
-Nx = 500
+Nx = 50
 Ny = 1
-Nz = 500
+Nz = 2
 Nin = Nx + Ny + Nz # needs to be >= 1 even if no input
 Nhidden = 2000
 Nout = Nz

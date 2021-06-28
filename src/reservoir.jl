@@ -48,22 +48,17 @@ nin(reservoir::Reservoir) = size(reservoir.Win, 2)
 nout(reservoir::Reservoir) = size(reservoir.Wout, 1)
 nhidden(reservoir::Reservoir) = size(reservoir.Wfb, 1)
 
-cpu(reservoir::Reservoir) = Reservoir(adapt(Array, reservoir.Wr),
-                                      adapt(Array, reservoir.Win),
-                                      adapt(Array, reservoir.Wfb),
-                                      adapt(Array, reservoir.Wout),
-                                      reservoir.ξhidden!,
-                                      reservoir.ξ!,
-                                      reservoir.τ,
-                                      reservoir.λ)
-gpu(reservoir::Reservoir) = Reservoir(adapt(CuArray, reservoir.Wr),
-                                      adapt(CuArray, reservoir.Win),
-                                      adapt(CuArray, reservoir.Wfb),
-                                      adapt(CuArray, reservoir.Wout),
-                                      reservoir.ξhidden!,
-                                      reservoir.ξ!,
-                                      reservoir.τ,
-                                      reservoir.λ)
+Adapt.adapt_structure(to, reservoir::Reservoir) = Reservoir(adapt(to, reservoir.Wr),
+                                                            adapt(to, reservoir.Win),
+                                                            adapt(to, reservoir.Wfb),
+                                                            adapt(to, reservoir.Wout),
+                                                            reservoir.ξhidden!,
+                                                            reservoir.ξ!,
+                                                            reservoir.τ,
+                                                            reservoir.λ)
+
+cpu(reservoir::Reservoir) = adapt(Array, reservoir)
+gpu(reservoir::Reservoir) = adapt(CuArray, reservoir)
 
 struct ReservoirState{T}
     u::T
@@ -112,16 +107,15 @@ function RMHebb(T, η, τ, N)
 end
 RMHebb(reservoir::Reservoir{T}; η, τ) where {T} = RMHebb(T, η, τ, nout(reservoir))
 
-cpu(learner::RMHebb) = RMHebb(learner.η,
-                              LowPassFilter(learner.zlpf.τ, adapt(Array, learner.zlpf.f̄)),
-                              LowPassFilter(learner.Plpf.τ, adapt(Array, learner.Plpf.f̄)))
-gpu(learner::RMHebb) = RMHebb(learner.η,
-                              LowPassFilter(learner.zlpf.τ, adapt(CuArray, learner.zlpf.f̄)),
-                              LowPassFilter(learner.Plpf.τ, adapt(CuArray, learner.Plpf.f̄)))
+Adapt.adapt_structure(to, learner::RMHebb) =
+    RMHebb(learner.η, adapt(to, learner.zlpf), adapt(to, learner.Plpf))
+
+cpu(learner::RMHebb) = adapt(Array, learner)
+gpu(learner::RMHebb) = adapt(CuArray, learner)
 
 function (learner::RMHebb)(reservoir::Reservoir, state::ReservoirState, f, t, Δt)
     P = - @reduce sum(i) (state.z[i] - f[i])^2
-    P̄ = learner.Plpf(P, Δt) |> cpu
+    P̄ = adapt(Array, learner.Plpf(P, Δt))
     M = Int(P > only(P̄))
 
     z̄ = learner.zlpf(state.z, Δt)

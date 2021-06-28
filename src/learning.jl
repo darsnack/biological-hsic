@@ -1,14 +1,16 @@
-struct GlobalError{T, S, R}
+struct GlobalError{T, S, R, Q}
     γ::T
     α::S
     ξ::R
+    λ::Q
 end
-GlobalError{T}(bs, n) where {T} =
-    GlobalError(zeros(T, bs), zeros(T, bs, n), zeros(T, n))
+GlobalError{T}(bs, n; λ = 2) where {T} =
+    GlobalError(zeros(T, bs), zeros(T, bs, n), zeros(T, n), λ)
 
 Adapt.adapt_structure(to, error::GlobalError) = GlobalError(adapt(to, error.γ),
                                                             adapt(to, error.α),
-                                                            adapt(to, error.ξ))
+                                                            adapt(to, error.ξ),
+                                                            error.λ)
 cpu(error::GlobalError) = adapt(Array, error)
 gpu(error::GlobalError) = adapt(CuArray, error)
 
@@ -16,25 +18,34 @@ function (error::GlobalError)(kx, ky, kz, z; σz = estσ(z))
     bs = size(error.γ, 1)
 
     @cast error.γ[i] = (kx[1, i] - @reduce sum(k) kx[1, k] / bs) -
-                        2 * (ky[1, i] - @reduce sum(k) ky[1, k] / bs)
+                        error.λ * (ky[1, i] - @reduce sum(k) ky[1, k] / bs)
 
     @cast error.α[i, k] = -2 * kz[1, i] * (z[k, 1] - z[k, i]) / σz^2
-    @cast error.α[i, k] = error.α[i, k] - @reduce _[k] := sum(n) error.α[n, k]
+    @cast error.α[i, k] = error.α[i, k] - @reduce _[k] := sum(n) error.α[n, k] / bs
 
-    @reduce error.ξ[k] = sum(i) 1000 * error.γ[i] * error.α[i, k] / (bs - 1)^2
+    @reduce error.ξ[k] = sum(i) error.γ[i] * error.α[i, k] / (bs - 1)^2
 
     return error.ξ
 end
 
+function _fill!(buffer::CircularBuffer{T}, xs::AbstractVector{T}) where T
+    foreach(x -> isfull(buffer) || push!(buffer, x), xs)
+
+    return buffer
+end
+
+CircularBuffer(xs::AbstractVector{T}) where T =
+    _fill!(CircularBuffer{T}(length(xs)), xs)
+
 function _shiftbuffers!(buffers, sample)
-    next = popfirst!.(buffers[1:(end - 1)])
-    push!(buffers[1], sample)
-    push!.(buffers[2:end], next)
+    @inbounds next = popfirst!.(buffers[1:(end - 1)])
+    @inbounds push!(buffers[1], sample)
+    @inbounds push!.(buffers[2:end], next)
 
     return buffers
 end
 
-struct HSICIdeal{T, S, R}
+struct HSICIdeal{T, S, R, P}
     Xs::T
     Ys::T
     Zpres::T
@@ -42,31 +53,58 @@ struct HSICIdeal{T, S, R}
     Kx::S
     Ky::S
     Kz::S
-    λ::R
+    γ::R
+    cache::P
 end
 
-function HSICIdeal(xencoder::RateEncoder,
-              yencoder::RateEncoder,
-              layer::LIFDense{T},
-              ::LIFDenseState{ZT},
-              bs; λ, nbuffer) where {T, ZT}
+function HSICIdeal(xdata, ydata, layer::LIFDense{T}, ::LIFDenseState{S}, bs; γ, nbuffer) where {T, S}
     n = nout(layer)
-    XT = eltype(xencoder)
-    YT = eltype(yencoder)
+    Din = size(xdata, 1)
+    Dout = size(ydata, 1)
+    XT = eltype(xdata)
+    YT = eltype(ydata)
+    ZT = eltype(S)
 
-    Xs = [fill!(CircularBuffer{XT}(nbuffer), _zero(XT, nout(xencoder))) for _ in 1:bs]
-    Ys = [fill!(CircularBuffer{YT}(nbuffer), _zero(YT, nout(yencoder))) for _ in 1:bs]
-    Zpres = [fill!(CircularBuffer{ZT}(nbuffer), _zero(ZT, nin(layer))) for _ in 1:bs]
-    Zposts = [fill!(CircularBuffer{ZT}(nbuffer), _zero(ZT, n)) for _ in 1:bs]
+    Xs = [fill!(CircularBuffer{Vector{XT}}(nbuffer), zeros(XT, Din)) for _ in 1:bs]
+    Ys = [fill!(CircularBuffer{Vector{YT}}(nbuffer), zeros(YT, Dout)) for _ in 1:bs]
+    Zpres = [fill!(CircularBuffer{Vector{ZT}}(nbuffer), zeros(ZT, nin(layer))) for _ in 1:bs]
+    Zposts = [fill!(CircularBuffer{Vector{ZT}}(nbuffer), zeros(ZT, n)) for _ in 1:bs]
+    cache = (x = zeros(XT, Din, bs),
+             y = zeros(YT, Dout, bs),
+             zpre = zeros(ZT, nin(layer), bs),
+             zpost = zeros(ZT, n, bs))
 
-    Kx = zeros(eltype(XT), bs, bs)
-    Ky = zeros(eltype(YT), bs, bs)
-    Kz = zeros(eltype(ZT), bs, bs)
+    Kx = zeros(XT, bs, bs)
+    Ky = zeros(YT, bs, bs)
+    Kz = zeros(ZT, bs, bs)
 
-    return HSICIdeal(Xs, Ys, Zpres, Zposts, Kx, Ky, Kz, λ)
+    return HSICIdeal(Xs, Ys, Zpres, Zposts, Kx, Ky, Kz, γ, cache)
 end
+
+function Adapt.adapt_structure(to, hsic::HSICIdeal)
+    Xs = [CircularBuffer(adapt.(to, x)) for x in hsic.Xs]
+    Ys = [CircularBuffer(adapt.(to, x)) for x in hsic.Ys]
+    Zpres = [CircularBuffer(adapt.(to, x)) for x in hsic.Zpres]
+    Zposts = [CircularBuffer(adapt.(to, x)) for x in hsic.Zposts]
+    cache = (x = adapt(to, hsic.cache.x),
+             y = adapt(to, hsic.cache.y),
+             zpre = adapt(to, hsic.cache.zpre),
+             zpost = adapt(to, hsic.cache.zpost))
+    Kx = adapt(to, hsic.Kx)
+    Ky = adapt(to, hsic.Ky)
+    Kz = adapt(to, hsic.Kz)
+
+    return HSICIdeal(Xs, Ys, Zpres, Zposts, Kx, Ky, Kz, hsic.γ, cache)
+end
+
+cpu(hsic::HSICIdeal) = adapt(Array, hsic)
+gpu(hsic::HSICIdeal) = adapt(CuArray, hsic)
+
+state(::HSICIdeal) = nothing
 
 function (hsic::HSICIdeal)(x, y, zpre, zpost)
+    xs, ys, zpres, zposts = hsic.cache
+
     # push new samples into buffers
     _shiftbuffers!(hsic.Xs, x)
     _shiftbuffers!(hsic.Ys, y)
@@ -74,12 +112,15 @@ function (hsic::HSICIdeal)(x, y, zpre, zpost)
     _shiftbuffers!(hsic.Zposts, zpost)
 
     # compute new kernel matrices
-    xs = reduce(hcat, getindex.(hsic.Xs, 1))
-    ys = reduce(hcat, getindex.(hsic.Ys, 1))
-    zposts = reduce(hcat, getindex.(hsic.Zposts, 1))
+    for n in 1:size(xs, 2)
+        @inbounds xs[:, n] .= hsic.Xs[n][1]
+        @inbounds ys[:, n] .= hsic.Ys[n][1]
+        @inbounds zpres[:, n] .= hsic.Zpres[n][1]
+        @inbounds zposts[:, n] .= hsic.Zposts[n][1]
+    end
     σ = max(1f-3, estσ(zposts))
     k_hsic!(hsic.Kx, xs, xs; σ = max(1f-3, estσ(xs)))
-    k_hsic!(hsic.Ky, ys, ys; σ = 0.5)
+    k_hsic!(hsic.Ky, ys, ys; σ = (size(ys, 1) == 1) ? 5f-1 : 1f0)
     k_hsic!(hsic.Kz, zposts, zposts; σ = σ)
 
     # compute local terms
@@ -94,65 +135,97 @@ function (hsic::HSICIdeal)(x, y, zpre, zpost)
 
     return -Δw
 end
+(hsic::HSICIdeal)(state, x, y, zpre, zpost, t, Δt) = hsic(x, y, zpre, zpost)
 
-struct HSICApprox{T, S, R}
+struct HSICApprox{T, S, R, E<:GlobalError, U}
     Xs::T
     Ys::T
     Zposts::T
     Kx::S
     Ky::S
     Kz::S
-    λ::R
+    γ::R
+    ξ::E
+    cache::U
 end
 
-function HSICApprox(xencoder::RateEncoder,
-              yencoder::RateEncoder,
-              layer::LIFDense{T},
-              ::LIFDenseState{ZT},
-              bs; λ, nbuffer) where {T, ZT}
+function HSICApprox(xdata, ydata, layer::LIFDense{T}, ::LIFDenseState{S}, bs; γ, nbuffer) where {T, S}
     n = nout(layer)
-    XT = eltype(xencoder)
-    YT = eltype(yencoder)
+    Din = size(xdata, 1)
+    Dout = size(ydata, 1)
+    XT = eltype(xdata)
+    YT = eltype(ydata)
+    ZT = eltype(S)
 
-    Xs = [fill!(CircularBuffer{XT}(nbuffer), _zero(XT, nout(xencoder))) for _ in 1:bs]
-    Ys = [fill!(CircularBuffer{YT}(nbuffer), _zero(YT, nout(yencoder))) for _ in 1:bs]
-    Zposts = [fill!(CircularBuffer{ZT}(nbuffer), _zero(ZT, n)) for _ in 1:bs]
+    Xs = [fill!(CircularBuffer{Vector{XT}}(nbuffer), zeros(XT, Din)) for _ in 1:bs]
+    Ys = [fill!(CircularBuffer{Vector{YT}}(nbuffer), zeros(YT, Dout)) for _ in 1:bs]
+    Zposts = [fill!(CircularBuffer{Vector{ZT}}(nbuffer), zeros(ZT, n)) for _ in 1:bs]
+    cache = (x = zeros(XT, Din, bs),
+             y = zeros(YT, Dout, bs),
+             zpost = zeros(ZT, n, bs))
 
-    Kx = zeros(eltype(XT), bs, bs)
-    Ky = zeros(eltype(YT), bs, bs)
-    Kz = zeros(eltype(ZT), bs, bs)
+    Kx = zeros(XT, bs, bs)
+    Ky = zeros(YT, bs, bs)
+    Kz = zeros(ZT, bs, bs)
 
-    return HSICApprox(Xs, Ys, Zposts, Kx, Ky, Kz, λ)
+    ξ = GlobalError{T}(bs, n; λ = γ)
+
+    return HSICApprox(Xs, Ys, Zposts, Kx, Ky, Kz, γ, ξ, cache)
 end
+
+function Adapt.adapt_structure(to, hsic::HSICApprox)
+    Xs = [CircularBuffer(adapt.(to, x)) for x in hsic.Xs]
+    Ys = [CircularBuffer(adapt.(to, x)) for x in hsic.Ys]
+    Zposts = [CircularBuffer(adapt.(to, x)) for x in hsic.Zposts]
+    cache = (x = adapt(to, hsic.cache.x),
+             y = adapt(to, hsic.cache.y),
+             zpost = adapt(to, hsic.cache.zpost))
+    Kx = adapt(to, hsic.Kx)
+    Ky = adapt(to, hsic.Ky)
+    Kz = adapt(to, hsic.Kz)
+    ξ = adapt(to, hsic.ξ)
+
+    return HSICApprox(Xs, Ys, Zposts, Kx, Ky, Kz, hsic.γ, ξ, cache)
+end
+
+cpu(hsic::HSICApprox) = adapt(Array, hsic)
+gpu(hsic::HSICApprox) = adapt(CuArray, hsic)
+
+state(::HSICApprox) = nothing
 
 function (hsic::HSICApprox)(x, y, zpre, zpost)
+    xs, ys, zposts = hsic.cache
+
     # push new samples into buffers
     _shiftbuffers!(hsic.Xs, x)
     _shiftbuffers!(hsic.Ys, y)
     _shiftbuffers!(hsic.Zposts, zpost)
 
     # compute new kernel matrices
-    xs = reduce(hcat, getindex.(hsic.Xs, 1))
-    ys = reduce(hcat, getindex.(hsic.Ys, 1))
-    zposts = reduce(hcat, getindex.(hsic.Zposts, 1))
+    for n in 1:size(xs, 2)
+        @inbounds xs[:, n] .= hsic.Xs[n][1]
+        @inbounds ys[:, n] .= hsic.Ys[n][1]
+        @inbounds zposts[:, n] .= hsic.Zposts[n][1]
+    end
     σ = max(1f-3, estσ(zposts))
     k_hsic!(hsic.Kx, xs, xs; σ = max(1f-3, estσ(xs)))
-    k_hsic!(hsic.Ky, ys, ys; σ = 0.5)
+    k_hsic!(hsic.Ky, ys, ys; σ = (size(ys, 1) == 1) ? 5f-1 : 1f0)
     k_hsic!(hsic.Kz, zposts, zposts; σ = σ)
 
+    # compute global term
+    ξ = hsic.ξ(hsic.Kx, hsic.Ky, hsic.Kz, zposts; σz = σ)
+
     # compute local terms
-    @cast α[q, n, m] := -2 * (hsic.Kz[1, q] / σ^2) * (zposts[n, 1] - zposts[n, q]) *
-                         ((1 - zposts[n, 1]^2) * zpre[m])
+    @cast β[i, j] := (1 - zpost[i]^2) * zpre[j]
 
     # compute weight update
-    @reduce Δw[i, j] := sum(q) ((hsic.Kx[1, q] - @reduce _[] := mean(n) hsic.Kx[1, n]) -
-                                 hsic.λ * (hsic.Ky[1, q] - @reduce _[] := mean(n) hsic.Ky[1, n])) *
-                                (α[q, i, j] - @reduce _[i, j] := mean(n) α[n, i, j])
+    @cast Δw[i, j] := -ξ[i] * β[i, j]
 
-    return -Δw
+    return Δw
 end
+(hsic::HSICApprox)(state, x, y, zpre, zpost, t, Δt) = hsic(x, y, zpre, zpost)
 
-struct HSIC{T, S, R, E<:GlobalError, P<:Reservoir, Q<:RMHebb}
+struct HSIC{T, S, R, E<:GlobalError, P<:Reservoir, Q<:RMHebb, U}
     Xs::T
     Ys::T
     Zposts::T
@@ -163,47 +236,76 @@ struct HSIC{T, S, R, E<:GlobalError, P<:Reservoir, Q<:RMHebb}
     ξ::E
     reservoir::P
     learner::Q
+    cache::U
 end
 
-function HSIC(xencoder::RateEncoder,
-              yencoder::RateEncoder,
+function HSIC(xdata,
+              ydata,
               layer::LIFDense{T},
-              ::LIFDenseState{ZT},
+              ::LIFDenseState{S},
               reservoir::Reservoir,
               learner::RMHebb,
-              bs; γ, nbuffer) where {T, ZT}
+              bs; γ, nbuffer) where {T, S}
     n = nout(layer)
-    XT = eltype(xencoder)
-    YT = eltype(yencoder)
+    Din = size(xdata, 1)
+    Dout = size(ydata, 1)
+    XT = eltype(xdata)
+    YT = eltype(ydata)
+    ZT = eltype(S)
 
-    Xs = [fill!(CircularBuffer{XT}(nbuffer), _zero(XT, nout(xencoder))) for _ in 1:bs]
-    Ys = [fill!(CircularBuffer{YT}(nbuffer), _zero(YT, nout(yencoder))) for _ in 1:bs]
-    Zposts = [fill!(CircularBuffer{ZT}(nbuffer), _zero(ZT, n)) for _ in 1:bs]
+    Xs = [fill!(CircularBuffer{Vector{XT}}(nbuffer), zeros(XT, Din)) for _ in 1:bs]
+    Ys = [fill!(CircularBuffer{Vector{YT}}(nbuffer), zeros(YT, Dout)) for _ in 1:bs]
+    Zposts = [fill!(CircularBuffer{Vector{ZT}}(nbuffer), zeros(ZT, n)) for _ in 1:bs]
+    cache = (x = zeros(XT, Din, bs),
+             y = zeros(YT, Dout, bs),
+             zpost = zeros(ZT, n, bs))
 
-    Kx = _zero(XT, bs, bs)
-    Ky = _zero(YT, bs, bs)
-    Kz = _zero(ZT, bs, bs)
+    Kx = zeros(XT, bs, bs)
+    Ky = zeros(YT, bs, bs)
+    Kz = zeros(ZT, bs, bs)
 
-    ξ = adapt(ZT, GlobalError{T}(bs, n))
+    ξ = GlobalError{T}(bs, n; λ = γ)
 
-    return HSIC(Xs, Ys, Zposts, Kx, Ky, Kz, γ, ξ, reservoir, learner)
+    return HSIC(Xs, Ys, Zposts, Kx, Ky, Kz, γ, ξ, reservoir, learner, cache)
 end
+
+function Adapt.adapt_structure(to, hsic::HSIC)
+    Xs = [CircularBuffer(adapt.(to, x)) for x in hsic.Xs]
+    Ys = [CircularBuffer(adapt.(to, x)) for x in hsic.Ys]
+    Zposts = [CircularBuffer(adapt.(to, x)) for x in hsic.Zposts]
+    cache = (x = adapt(to, hsic.cache.x),
+             y = adapt(to, hsic.cache.y),
+             zpost = adapt(to, hsic.cache.zpost))
+    Kx = adapt(to, hsic.Kx)
+    Ky = adapt(to, hsic.Ky)
+    Kz = adapt(to, hsic.Kz)
+    ξ = adapt(to, hsic.ξ)
+    reservoir = adapt(to, hsic.reservoir)
+    learner = adapt(to, hsic.learner)
+
+    return HSIC(Xs, Ys, Zposts, Kx, Ky, Kz, hsic.γ, ξ, reservoir, learner, cache)
+end
+
+cpu(hsic::HSIC) = adapt(Array, hsic)
+gpu(hsic::HSIC) = adapt(CuArray, hsic)
 
 state(hsic::HSIC) = state(hsic.reservoir)
 
-function (hsic::HSIC)(state, x, y, zpre, zpost, t, Δt; explore = true)
+function (hsic::HSIC)(state, x, y, zpre, zpost, t, Δt)
+    xs, ys, zposts = hsic.cache
+
     # push new samples into buffers
     _shiftbuffers!(hsic.Xs, x)
     _shiftbuffers!(hsic.Ys, y)
     _shiftbuffers!(hsic.Zposts, zpost)
 
     # compute new kernel matrices
-    xs = reduce(hcat, getindex.(hsic.Xs, 1))
-    ys = reduce(hcat, getindex.(hsic.Ys, 1))
-    zposts = reduce(hcat, getindex.(hsic.Zposts, 1))
+    xs .= reduce(hcat, getindex.(hsic.Xs, 1))
+    ys .= reduce(hcat, getindex.(hsic.Ys, 1))
+    zposts .= reduce(hcat, getindex.(hsic.Zposts, 1))
     σ = max(1f-3, estσ(zposts))
     k_hsic!(hsic.Kx, xs, xs; σ = max(1f-3, estσ(xs)))
-    k_hsic!(hsic.Ky, ys, ys; σ = 0.5)
+    k_hsic!(hsic.Ky, ys, ys; σ = (size(ys, 1) == 1) ? 5f-1 : 1f0)
     k_hsic!(hsic.Kz, zposts, zposts; σ = σ)
 
     # compute global term
@@ -214,7 +316,7 @@ function (hsic::HSIC)(state, x, y, zpre, zpost, t, Δt; explore = true)
           state,
           hsic.learner,
           concatenate(x, y, zpost),
-          ξ, t, Δt; explore = explore)
+          ξ, t, Δt)
 
     # compute local terms
     @cast β[i, j] := (1 - zpost[i]^2) * zpre[j]
@@ -225,7 +327,7 @@ function (hsic::HSIC)(state, x, y, zpre, zpost, t, Δt; explore = true)
     return Δw
 end
 
-function update!(η, layer::LIFDense, hsic::HSIC, state, x, y, zpre, zpost, t, Δt)
+function update!(η, layer::LIFDense, hsic, state, x, y, zpre, zpost, t, Δt)
     layer.W .+= η(t) .* hsic(state, x, y, zpre, zpost, t, Δt)
 end
 
