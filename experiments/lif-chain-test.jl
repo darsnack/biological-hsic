@@ -48,7 +48,6 @@ recording = chain_test(data, layer_config, target;
                        noise = noise,
                        τavg = τavg,
                        Δt = Δt,
-                       Nsamples = Nsamples,
                        Δtsample = Δtsample,
                        bs = bs,
                        nepochs = nepochs,

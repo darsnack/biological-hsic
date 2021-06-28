@@ -331,8 +331,14 @@ function update!(η, layer::LIFDense, hsic, state, x, y, zpre, zpost, t, Δt)
     layer.W .+= η(t) .* hsic(state, x, y, zpre, zpost, t, Δt)
 end
 
-function update!(η, layers::LIFChain, hsics, states, x, y, zpres, zposts, t, Δt)
-    foreach(layers, hsics, states, zpres, zposts) do layer, hsic, state, zpre, zpost
-        update!(η, layer, hsic, state, x, y, zpre, zpost, t, Δt)
+function update!(η, layers::LIFChain, hsics, states, x, y, zpres, zposts, t, Δt; nthreads = 1)
+    if nthreads > 1
+        Threads.@threads for i in 1:length(layers)
+            update!(η, layers[i], hsics[i], states[i], x, y, zpres[i], zposts[i], t, Δt)
+        end
+    else
+        foreach(layers, hsics, states, zpres, zposts) do layer, hsic, state, zpre, zpost
+            update!(η, layer, hsic, state, x, y, zpre, zpost, t, Δt)
+        end
     end
 end
