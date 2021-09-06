@@ -30,6 +30,117 @@ include("../src/learning.jl")
 include("../src/schedulers.jl")
 include("../src/loops.jl")
 
+function reservoir_test(X, Y, Z, target;
+                        η0 = 1f-4,
+                        τ = 50f-3, # LIF time constant
+                        λ = 1.7, # chaotic level
+                        τavg = 5f-3, # signal smoothing constant
+                        Tinit = 50f0, # warmup time
+                        Ttrain = 500f0, # training time
+                        Ttest = 100f0, # testing time
+                        Δt = 1f-3, # simulation time step
+                        Nsamples = 100, # number of data samples
+                        Nhidden = 2000, # number of hidden neurons in reservoir
+                        Δtsample = 50f-3, # time to present each data sample
+                        bs = 6) # effective batch size
+    # learning rate
+    η = ηdecay(η0; toffset = Tinit, rate = 20f0)
+
+    # network sizes
+    Nx = size(X, 1)
+    Ny = size(Y, 1)
+    Nz = size(Z, 1)
+    Nin = Nx + Ny + Nz # needs to be >= 1 even if no input
+    Nhidden = 2000
+    Nout = Nz
+
+    # data
+
+    σx = estσ(X)
+    σy = estσ(Y)
+    σz = estσ(Z)
+    Kx = k_hsic(X, X; σ = σx)
+    Ky = k_hsic(Y, Y; σ = σy)
+    Kz = k_hsic(Z, Z; σ = σz)
+
+    # input signal
+    timetoidx(t) = (t < 0) ? 1 : (Int(round(t / Δtsample)) % Nsamples) + 1
+    function input(t)
+        (t < 0) && return zeros(Float32, Nin) |> target
+        i = timetoidx(t)
+
+        return concatenate(X[:, i], Y[:, i], Z[:, i])
+    end
+
+    # true signal
+    ξ = GlobalError{Float32}(bs, Nz) |> target
+    function f(t)#::CuVector{Float32}
+        is = timetoidx.([t - i * Δtsample for i in 0:(bs - 1)])
+        kx = Kx[is, is]
+        ky = Ky[is, is]
+        kz = Kz[is, is]
+        z = Z[:, is]
+
+        return ξ(kx, ky, kz, z; σz = σz)
+    end
+
+    ## PROBLEM SETUP
+
+    reservoir = Reservoir{Float32}(Nin => Nout, Nhidden;
+                                   λ = λ, τ = τ, noisehidden = 5f-6, noiseout = 1f-2) |> target
+    learner = RMHebb(reservoir; η = η, τ = τavg) |> target
+
+    ## RECORDING SETUP
+
+    recording = (t = Float32[],
+                 z = Vector{Float32}[],
+                 zlpf = Vector{Float32}[],
+                 wnorm = Float32[],
+                 f = Vector{Float32}[])
+
+    ## STATE INITIALIZATION
+
+    reservoir_state = state(reservoir)
+
+    ## WARMUP
+
+    @info "Starting warmup..."
+    @progress "INIT" for t in 0:Δt:(Tinit - Δt)
+        step!(reservoir, reservoir_state, input(t), t, Δt)
+        push!(recording.t, t)
+        push!(recording.z, cpu(reservoir_state.z))
+        push!(recording.zlpf, cpu(learner.zlpf.f̄))
+        push!(recording.wnorm, norm(reservoir.Wout))
+        push!(recording.f, cpu(f(t)))
+    end
+
+    ## TRAIN
+
+    @info "Starting training..."
+    @progress "TRAIN" for t in Tinit:Δt:(Tinit + Ttrain - Δt)
+        step!(reservoir, reservoir_state, learner, input(t), f(t), t, Δt)
+        push!(recording.t, t)
+        push!(recording.z, cpu(reservoir_state.z))
+        push!(recording.zlpf, cpu(learner.zlpf.f̄))
+        push!(recording.wnorm, norm(reservoir.Wout))
+        push!(recording.f, cpu(f(t)))
+    end
+
+    ## TEST
+
+    @info "Starting testing..."
+    @progress "TEST" for t in (Tinit + Ttrain):Δt:(Tinit + Ttrain + Ttest)
+        step!(reservoir, reservoir_state, input(t), t, Δt; explore = false)
+        push!(recording.t, t)
+        push!(recording.z, cpu(reservoir_state.z))
+        push!(recording.zlpf, cpu(learner.zlpf.f̄))
+        push!(recording.wnorm, norm(reservoir.Wout))
+        push!(recording.f, cpu(f(t)))
+    end
+
+    return recording
+end
+
 function dense_test(data, target;
                     τff = 5f-3, # LIF time constant for FF network
                     τr = 50f-3, # LIF time constant for reservoirs

@@ -10,7 +10,7 @@ _zero(::Type{T}, dims...) where {T<:AbstractArray} = adapt(T, zeros(eltype(T), d
 
 trange(start, Δt, span) = start:Δt:(start + span - Δt)
 
-time2ind(t, Δt) = ceil(Int, t / Δt)
+time2ind(t, Δt) = max(ceil(Int, t / Δt), 0)
 
 function ηt(schedule, Δt)
     η(t) = schedule(time2ind(t, Δt))

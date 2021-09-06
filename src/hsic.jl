@@ -6,6 +6,10 @@ dist!(zs::AbstractMatrix, xs::AbstractMatrix, ys::AbstractMatrix) =
 dist!(zs::AbstractMatrix, xs::AbstractMatrix) =
     pairwise!(zs, SqEuclidean(), xs; dims = 2)
 
+dist(x::CuVector, y::CuVector) = norm(x .- y)^2
+dist(xs::CuMatrix, ys::CuMatrix) = @reduce _[i, j] := sum(μ) (xs[μ, i] .- ys[μ, j]).^2
+dist!(zs::CuMatrix, xs::CuMatrix, ys::CuMatrix) = @reduce zs[i, j] := sum(μ) (xs[μ, i] .- ys[μ, j]).^2
+
 estσ(xs, ys) = Zygote.ignore() do
     ϵ = convert(eltype(xs), 1e-2)
     d = filter(!iszero, triu!(dist(xs, ys), 1))
