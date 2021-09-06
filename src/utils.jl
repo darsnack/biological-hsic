@@ -10,6 +10,20 @@ _zero(::Type{T}, dims...) where {T<:AbstractArray} = adapt(T, zeros(eltype(T), d
 
 trange(start, Δt, span) = start:Δt:(start + span - Δt)
 
+time2ind(t, Δt) = ceil(Int, t / Δt)
+
+function ηt(schedule, Δt)
+    η(t) = schedule(time2ind(t, Δt))
+
+    return η
+end
+
+function ηdecay(ηi::T; toffset = zero(ηi), rate = 25) where T
+    η(t) = (t > toffset) ? ηi / (1 + (t - toffset) / rate) : zero(ηi)
+
+    return η
+end
+
 # inplace push! for CircularBuffer
 @inline function push_inplace!(cb::CircularBuffer, data)
     # if full, increment and overwrite, otherwise push
@@ -84,4 +98,20 @@ function decisionboundary!(axis, W; ϕ = identity, f = x -> x > 0 ? 1 : 0, npts 
     end
 
     return contour!(axis, vec(x), vec(y), Y; linewidth = 2, levels = 1)
+end
+
+function classpredictionplot!(axs, predictions, labels, classes)
+    μs = [vec(mean(predictions[:, labels .== class]; dims = 2)) for class in classes]
+    σs = [vec(std(predictions[:, labels .== class]; dims = 2)) for class in classes]
+
+    lines = []
+    bands = []
+    for (axis, class, μ, σ) in zip(axs, classes, μs, σs)
+        axis.title = "Class $class"
+        push!(lines, lines!(axis, μ))
+        push!(bands, band!(axis, 1:length(classes), μ .- σ, μ .+ σ))
+        axis.xticks = (1:length(classes), string.(classes))
+    end
+
+    return lines, bands
 end

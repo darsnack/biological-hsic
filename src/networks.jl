@@ -4,11 +4,11 @@ struct LIFDense{T, S<:AbstractMatrix{T}, F}
     ξ!::F
 end
 
-function LIFDense{T}(in, out; τ = 50f-3, f = tanh, init = randn) where T
+function LIFDense{T}(in, out; τ = 50f-3, init = randn, ξ = 0.05) where T
     # noise distributions
-    function ξ!(dest) # Uniform(-0.05, 0.05)
+    function ξ!(dest) # Uniform(-ξ, ξ)
         rand!(dest)
-        @. dest = 0.1 * dest - 0.05
+        @. dest = 2 * ξ * dest - ξ
         return dest
     end
 
@@ -40,7 +40,7 @@ state(layer::LIFDense) = LIFDenseState(layer)
 function (layer::LIFDense)(state::LIFDenseState, input, t, Δt)
     # get neuron firing rate
     layer.ξ!(state.r)
-    state.r .+= tanh.(state.u)
+    @. state.r += tanh(state.u)
 
     # update du
     state.u .+= Δt .* (-state.u .+ layer.W * input) ./ layer.τ

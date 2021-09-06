@@ -2,6 +2,8 @@ using Adapt
 using LoopVectorization
 using CUDA
 CUDA.allowscalar(false)
+using Distributed
+using Dagger
 
 using ProgressLogging
 using Logging: global_logger
@@ -9,10 +11,12 @@ using TerminalLoggers: TerminalLogger
 global_logger(TerminalLogger())
 
 using Distributions, Random
+using Distances
 using DataStructures
 using LinearAlgebra
 using TensorCast
 using Flux
+using Flux: Zygote
 using MLDataPattern, MLDatasets
 
 include("../src/utils.jl")
@@ -23,6 +27,7 @@ include("../src/reservoir.jl")
 include("../src/networks.jl")
 include("../src/data.jl")
 include("../src/learning.jl")
+include("../src/schedulers.jl")
 include("../src/loops.jl")
 
 function dense_test(data, target;
@@ -91,7 +96,7 @@ function dense_test(data, target;
             z = net(net_state, x, t, Δt)
 
             # get weight update
-            learner(learner_state, x, y, x, copy(z), t, Δt)
+            learner(learner_state, copy(x), copy(y), copy(x), copy(z), t, Δt)
 
             # record values
             (cld(t, Δt) % record_rate == 0) && record!(recording, t, net, learner)
@@ -112,7 +117,7 @@ function dense_test(data, target;
             z = net(net_state, x, t, Δt)
 
             # get weight update
-            learner(learner_state, x, y, x, copy(z), t, Δt)
+            learner(learner_state, copy(x), copy(y), copy(x), copy(z), t, Δt)
 
             # record values
             (cld(t, Δt) % record_rate == 0) && record!(recording, t, net, learner)
@@ -133,7 +138,7 @@ function dense_test(data, target;
             z = net(net_state, x, t, Δt)
 
             # get weight update
-            update!(net, learner, learner_state, x, y, x, copy(z), t, Δt) do t
+            update!(net, learner, learner_state, copy(x), copy(y), copy(x), copy(z), t, Δt) do t
                 η(t; ηi = η0, toffset = tcurrent, rate = 30f0)
             end
 
@@ -186,10 +191,7 @@ function chain_test(data, layer_config, target;
                     Tinit = 50f0, # warmup time
                     Tpre = 500f0) # pretraining time
 
-    η(t; ηi, toffset = zero(t), rate = 25f0) =
-        (t > toffset) ? ηi / (1 + (t - toffset) / rate) : zero(Float32)
     H = I - fill(1 / bs, bs, bs) |> target # centering matrix
-    hsic_loss(Kx, Kz) = tr(Kx * H * Kz * H) / (bs - 1)^2
 
     ## NETWORK SETUP
 
@@ -225,8 +227,8 @@ function chain_test(data, layer_config, target;
     function record!(recording, t, learners)
         push!(recording.t, t)
         for (i, learner) in enumerate(learners)
-            lossx = hsic_loss(learner.Kx, learner.Kz)
-            lossy = hsic_loss(learner.Ky, learner.Kz)
+            lossx = hsic(learner.Kx, learner.Kz, H)
+            lossy = hsic(learner.Ky, learner.Kz, H)
             push!(recording.lossxs[i], lossx)
             push!(recording.lossys[i], lossy)
         end
@@ -245,7 +247,10 @@ function chain_test(data, layer_config, target;
 
             # get weight update
             zpres = (x, Base.front(zs)...)
-            update!(t -> 0, net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt)
+            update!(t -> 0,
+                    net, learners, learner_states,
+                    copy(x), copy(y), copy.(zpres), copy.(zs),
+                    t, Δt)
 
             # record values
             (cld(t, Δt) % record_rate == 0) && record!(recording, t, learners)
@@ -267,7 +272,10 @@ function chain_test(data, layer_config, target;
 
             # get weight update
             zpres = (x, Base.front(zs)...)
-            update!(t -> 0, net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt)
+            update!(t -> 0,
+                    net, learners, learner_states,
+                    copy(x), copy(y), copy.(zpres), copy.(zs),
+                    t, Δt)
 
             # record values
             (cld(t, Δt) % record_rate == 0) && record!(recording, t, learners)
@@ -289,7 +297,7 @@ function chain_test(data, layer_config, target;
 
             # get weight update
             zpres = (x, Base.front(zs)...)
-            update!(net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt) do t
+            update!(net, learners, learner_states, copy(x), copy(y), copy.(zpres), copy.(zs), t, Δt) do t
                 η(t; ηi = η0, toffset = Tinit + Tpre, rate = 50f0)
             end
 
@@ -325,42 +333,217 @@ function chain_test(data, layer_config, target;
     return recording
 end
 
-# function mnist_test(layer_config, target;
+function mnist_test(layer_config, target;
+                    τff = 5f-3, # LIF time constant for FF network
+                    γs = fill(2f0, length(layer_config)), # HSIC balance parameter
+                    opts = fill(Descent(1f-2), length(layer_config)), # optimizers
+                    schedules = map(o -> Sequence(o.eta => nepochs), opts),
+                    Δt = 1f-3, # simulation time step
+                    Δtsample = 50f-3, # time to present each data sample
+                    bs = 15, # effective batch size
+                    nepochs = 100, # number of epochs
+                    Tinit = 50f0, # warmup time
+                    percent_samples = 100,
+                    classes = 0:9,
+                    nthreads = 1)
+
+    ## DATA SETUP
+
+    xtrain, ytrain = MNIST.traindata(Float32)
+    xtest, ytest = MNIST.testdata(Float32)
+
+    (xtrain, ytrain), _ = stratifiedobs((xtrain, ytrain), percent_samples / 100)
+
+    trainidx = findall(y -> any(y .== classes), ytrain)
+    xtrain, ytrain = xtrain[:, :, trainidx], ytrain[trainidx]
+    testidx = findall(y -> any(y .== classes), ytest)
+    xtest, ytest = xtest[:, :, testidx], ytest[testidx]
+
+    xtrain = Flux.flatten(xtrain)
+    xtest = Flux.flatten(xtest)
+    ytrain = convert(Array{Float32}, Flux.onehotbatch(ytrain, classes))
+    ytest = convert(Array{Float32}, Flux.onehotbatch(ytest, classes))
+
+    Din = size(xtrain, 1)
+    Dout = size(ytrain, 1)
+    nsamples = size(xtrain, 2)
+
+    ## CONSTANTS
+
+    H = I - fill(1 / bs, bs, bs) |> target # centering matrix
+
+    ## NETWORK SETUP
+
+    net = LIFChain([LIFDense{Float32}(in, out; τ = τff) for (in, out) in layer_config]) |> target
+    net_state = state(net)
+
+    learners = []
+    for (layer, layer_state, γ) in zip(net, net_state, γs)
+        learner = HSICApprox(xtrain,
+                             ytrain,
+                             layer,
+                             layer_state,
+                             bs; γ = γ, nbuffer = Int(cld(Δtsample, Δt))) |> target
+
+        push!(learners, learner)
+    end
+    learner_states = state.(learners)
+
+    ## RECORDING SETUP
+
+    recording = (t = Float32[],
+                 lossxs = [Float32[] for _ in net],
+                 lossys = [Float32[] for _ in net])
+    function record!(recording, t, learners)
+        push!(recording.t, t)
+        for (i, learner) in enumerate(learners)
+            # @show i, mean(learner.Kz), median(learner.Kz), minimum(learner.Kz)
+            lossx = hsic(learner.Kx, learner.Kz, H)
+            lossy = hsic(learner.Ky, learner.Kz, H)
+            push!(recording.lossxs[i], lossx)
+            push!(recording.lossys[i], lossy)
+        end
+    end
+    record_rate = Int(cld(Δtsample, Δt))
+
+    ## SCHEDULING SETUP
+
+    schedulers = map(opts, schedules) do o, s
+        Scheduler(Interpolator(Sequence(0f0 => bs,
+                                        Interpolator(s, nsamples) => nepochs * nsamples),
+                               Δtsample / Δt), o)
+    end
+
+    ## TRAINING
+
+    @info "Starting training..."
+    tcurrent = 0
+    current_loss = zeros(Float32, length(net))
+    current_n = 0
+    run!((xtrain, ytrain), net, learners, net_state, learner_states;
+         nepochs = nepochs, progress = "TRAIN") do i, x, y, net, learners, net_state, learner_states
+        x, y = target(x), target(y)
+        for t in tcurrent:Δt:(tcurrent + Δtsample)
+            # evaluate model
+            zs = net(net_state, x, t, Δt)
+
+            # get weight update
+            zpres = (x, Base.front(zs)...)
+            update!(schedulers,
+                    net, learners, learner_states,
+                    copy(x), copy(y), copy.(zpres), copy.(zs),
+                    t, Δt;
+                    nthreads = nthreads)
+
+            # record values
+            (cld(t, Δt) % record_rate == 0) && record!(recording, t, learners)
+        end
+        # update time
+        tcurrent += Δtsample
+
+        # accumulate loss
+        if i == 1
+            @. current_loss = last(recording.lossxs) - γs * last(recording.lossys)
+            current_n = 1
+        else
+            @. current_loss += last(recording.lossxs) - γs * last(recording.lossys)
+            current_n += 1
+        end
+
+        # display current loss
+        if i % 100 == 0
+            @show mean(learners[1].Kx), median(learners[1].Kx), minimum(learners[1].Kx)
+            @show mean(learners[1].Kz), median(learners[1].Kz), minimum(learners[1].Kz)
+            @show getproperty.(opts, :eta)
+            @show current_loss ./ current_n
+        end
+    end
+    # current_loss = zeros(Float32, length(net))
+    # current_n = 0
+    # run!((xtrain, ytrain), net, learners, net_state, learner_states;
+    #      nepochs = nepochs, progress = "TRAIN") do i, x, y, net, learners, net_state, learner_states
+    #     x, y = target(x), target(y)
+    #     @info "Starting $i ..."
+    #     for t in tcurrent:Δt:(tcurrent + Δtsample)
+    #         # evaluate model
+    #         blockers = step_update_dagger!(η, net, learners, net_state, learner_states, x, y, t, Δt)
+
+    #         # record values
+    #         if cld(t, Δt) % record_rate == 0
+    #             foreach(b -> wait(b), blockers)
+    #             record!(recording, t, learners)
+    #         end
+    #     end
+    #     # update time
+    #     tcurrent += Δtsample
+
+    #     # accumulate loss
+    #     if i == 1
+    #         @. current_loss = last(recording.lossxs) - γ * last(recording.lossys)
+    #         current_n = 1
+    #     else
+    #         @. current_loss += last(recording.lossxs) - γ * last(recording.lossys)
+    #         current_n += 1
+    #     end
+
+    #     # display current loss
+    #     if i % 100 == 0
+    #         @show η(tcurrent)
+    #         @show current_loss ./ current_n
+    #     end
+    # end
+
+    ## POST-TRAIN
+
+    @info "Starting testing..."
+    Ŷs = predict(net, xtest, ytest)
+
+    @info "Starting decoding..."
+    decoder = fitdecoder(Ŷs, ytest)
+
+    acc = mean(mean(Flux.onecold(Flux.softmax(decoder(ŷ))) .== Flux.onecold(y))
+               for (ŷ, y) in zip(eachbatch(Ŷs, 32), eachbatch(ytest, 32)))
+    @info "Accuracy = $(acc * 100)%"
+
+    return recording,
+           (model = (net, learners, decoder),
+            data = (train = (xtrain, ytrain), 
+                    test = (xtest, ytest),
+                    predictions = Ŷs))
+end
+
+# function profile_test(layer_config, target;
 #                     τff = 5f-3, # LIF time constant for FF network
-#                     τr = 50f-3, # LIF time constant for reservoirs
-#                     λ = 1.7, # chaotic level
 #                     γ = 2f0, # HSIC balance parameter
 #                     η0 = 1f-3, # initial hsic learning rate
-#                     ηr = 1f-4, # initial reservoir learning rate
-#                     Nhidden = 1000, # size of reservoir
-#                     noise = 5f-1,
-#                     τavg = 10f-3, # signal smoothing constant
 #                     Δt = 1f-3, # simulation time step
 #                     Δtsample = 50f-3, # time to present each data sample
 #                     bs = 15, # effective batch size
 #                     nepochs = 100, # number of epochs
-#                     Tinit = 50f0) # warmup time
+#                     Tinit = 50f0, # warmup time
+#                     nthreads = Threads.nthreads())
 
-#     η(t; ηi, toffset = zero(t), rate = 25f0) =
-#         (t > toffset) ? ηi / (1 + (t - toffset) / rate) : zero(Float32)
 #     H = I - fill(1 / bs, bs, bs) |> target # centering matrix
-#     hsic_loss(K1, K2) = tr(K1 * H * K2 * H) / (bs - 1)^2
 
 #     ## DATA SETUP
 
+#     CLASSES = [0, 1, 2, 4]
+
 #     xtrain, ytrain = MNIST.traindata(Float32)
 #     xtest, ytest = MNIST.testdata(Float32)
-#     Nsamples = 500
-#     Ttrain = Nsamples * Δtsample
-#     idx = rand(1:nobs(xtrain), Nsamples)
 
-#     xtrain = Flux.flatten(xtrain)[:, idx]
+#     trainidx = findall(y -> any(y .== CLASSES), ytrain)
+#     xtrain, ytrain = xtrain[:, :, trainidx], ytrain[trainidx]
+#     testidx = findall(y -> any(y .== CLASSES), ytest)
+#     xtest, ytest = xtest[:, :, testidx], ytest[testidx]
+
+#     xtrain = Flux.flatten(xtrain)
 #     xtest = Flux.flatten(xtest)
-#     ytrain = Flux.onehotbatch(ytrain, 0:9)[:, idx]
-#     ytest = Flux.onehotbatch(ytest, 0:9)
+#     ytrain = convert(Array{Float32}, Flux.onehotbatch(ytrain, CLASSES))
+#     ytest = convert(Array{Float32}, Flux.onehotbatch(ytest, CLASSES))
 
-#     xencoder = RateEncoder(xtrain, Δtsample) |> target
-#     yencoder = RateEncoder(convert(Array{Float32}, ytrain), Δtsample) |> target
+#     Din = size(xtrain, 1)
+#     Dout = size(ytrain, 1)
 
 #     ## NETWORK SETUP
 
@@ -374,13 +557,13 @@ end
 #         # reservoir_learner = RMHebb(reservoir;
 #         #                            η = t -> η(t; ηi = ηr, toffset = Tinit), τ = τavg) |> target
 
-#         learner = HSICApprox(xencoder,
-#                              yencoder,
+#         learner = HSICApprox(xtrain,
+#                              ytrain,
 #                              layer,
 #                              layer_state,
 #                             #  reservoir,
 #                             #  reservoir_learner,
-#                              bs; γ = γ, nbuffer = Int(cld(Δtsample, Δt)))
+#                              bs; γ = γ, nbuffer = Int(cld(Δtsample, Δt))) |> target
 
 #         push!(learners, learner)
 #     end
@@ -394,8 +577,8 @@ end
 #     function record!(recording, t, learners)
 #         push!(recording.t, t)
 #         for (i, learner) in enumerate(learners)
-#             lossx = hsic_loss(learner.Kx, learner.Kz)
-#             lossy = hsic_loss(learner.Ky, learner.Kz)
+#             lossx = hsic(learner.Kx, learner.Kz, H)
+#             lossy = hsic(learner.Ky, learner.Kz, H)
 #             push!(recording.lossxs[i], lossx)
 #             push!(recording.lossys[i], lossy)
 #         end
@@ -405,40 +588,48 @@ end
 #     ## WARMUP
 
 #     @info "Starting warmup..."
-#     tcurrent = 0f0
-#     @progress "INIT" for t in trange(tcurrent, Δt, Tinit)
-#         # evaluate model
-#         x = xencoder(t)
-#         y = yencoder(t)
-#         zs = net(net_state, x, t, Δt)
+#     @withprogress name="WARMUP" begin
+#         run!(0:Δt:Tinit,
+#              xtrain,
+#              ytrain,
+#              net,
+#              learners,
+#              net_state,
+#              learner_states) do t, xtrain, ytrain, net, learners, net_state, learner_states
+#             # evaluate model
+#             x, y = rateencode((xtrain, ytrain), t; Δt = Δtsample) .|> target
+#             zs = net(net_state, x, t, Δt)
 
-#         # get weight update
-#         zpres = (x, Base.front(zs)...)
-#         update!(t -> 0, net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt)
+#             # get weight update
+#             zpres = (x, Base.front(zs)...)
+#             update!(t -> 0, net, learners, learner_states, copy(x), copy(y), copy.(zpres), copy.(zs), t, Δt)
 
-#         # record values
-#         if cld(t, Δt) % record_rate == 0
-#             record!(recording, t, learners)
+#             # record values
+#             (cld(t, Δt) % record_rate == 0) && record!(recording, t, learners)
+
+#             @logprogress t / Tinit
 #         end
 #     end
-#     tcurrent += Tinit
+#     tcurrent::Float32 = Tinit
 
 #     ## PRETRAINING
 
 #     # @info "Starting pre-training..."
-#     # @progress "PRETRAIN" for t in trange(tcurrent, Δt, Tpre)
-#     #     # evaluate model
-#     #     x = xencoder(t)
-#     #     y = yencoder(t)
-#     #     zs = net(net_state, x, t, Δt)
+#     # @withprogress name="PRETRAIN" begin
+#     #     run!(tcurrent:Δt:(tcurrent + Tpre),
+#     #          data, net, learners, net_state, learner_states) do t, data, net, learners, net_state, learner_states
+#     #         # evaluate model
+#     #         x, y = rateencode(data, t; Δt = Δtsample) .|> target
+#     #         zs = net(net_state, x, t, Δt)
 
-#     #     # get weight update
-#     #     zpres = (x, Base.front(zs)...)
-#     #     update!(t -> 0, net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt)
+#     #         # get weight update
+#     #         zpres = (x, Base.front(zs)...)
+#     #         update!(t -> 0, net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt)
 
-#     #     # record values
-#     #     if cld(t, Δt) % record_rate == 0
-#     #         record!(recording, t, learners)
+#     #         # record values
+#     #         (cld(t, Δt) % record_rate == 0) && record!(recording, t, learners)
+
+#     #         @logprogress (t - tcurrent) / Tpre
 #     #     end
 #     # end
 #     # tcurrent += Tpre
@@ -446,61 +637,27 @@ end
 #     ## TRAINING
 
 #     @info "Starting training..."
-#     @progress "TRAIN" for _ in 1:nepochs
-#         # shuffle data
-#         idx = shuffle(1:Nsamples)
-#         xencoder.data .= xencoder.data[:, idx]
-#         yencoder.data .= yencoder.data[:, idx]
-
-#         current_loss = zeros(Float32, length(net))
-#         current_n = 0
-#         for t in trange(tcurrent, Δt, Ttrain)
+#     dataloader = eachobs(shuffleobs((xtrain, ytrain)))
+#     x, y = first(dataloader)
+#     function test(x, y, net, net_state, learners, learner_states)
+#         for t in tcurrent:Δt:(tcurrent + Δtsample)
 #             # evaluate model
-#             x = xencoder(t)
-#             y = yencoder(t)
 #             zs = net(net_state, x, t, Δt)
 
 #             # get weight update
 #             zpres = (x, Base.front(zs)...)
-#             update!(net, learners, learner_states, x, y, copy.(zpres), copy.(zs), t, Δt) do t
-#                 η(t; ηi = η0, toffset = Tinit, rate = 10 * Ttrain)
-#             end
+#             update!(ηdecay(η0; toffset = Tinit, rate = 50),
+#                     net, learners, learner_states,
+#                     copy(x), copy(y), copy.(zpres), copy.(zs),
+#                     t, Δt;
+#                     nthreads = nthreads)
 
 #             # record values
-#             if cld(t, Δt) % record_rate == 0
-#                 record!(recording, t, learners)
-#                 @. current_loss += last(recording.lossxs) - γ * last(recording.lossys)
-#                 current_n += 1
-#             end
+#             (cld(t, Δt) % record_rate == 0) && record!(recording, t, learners)
 #         end
-#         @show current_loss ./ current_n
-#         tcurrent += Ttrain
+#         # update time
+#         tcurrent += Δtsample
 #     end
 
-#     ## POST-TRAIN
-
-#     @info "Starting testing..."
-#     Ŷs = similar(ytest, Float32)
-#     net = net |> cpu
-#     net_state = state(net)
-#     @progress "TEST" for (i, x) in enumerate(eachcol(xtest))
-#         for t in trange(0, Δt, Δtsample)
-#             zs = net(net_state, x, t, Δt)
-#             Ŷs[:, i] .= zs[end]
-#         end
-#     end
-
-#     @info "Starting decoding..."
-#     decoder = Dense(size(Ŷs, 1), size(ytest, 1))
-#     opt = Momentum()
-#     loss(y, ŷ) = Flux.Losses.logitcrossentropy(decoder(ŷ), y)
-#     for _ in 1:1000
-#         Flux.train!(loss, Flux.params(decoder), eachbatch((ytest, Ŷs), 32), opt)
-#     end
-
-#     acc = mean(mean(Flux.onecold(Flux.softmax(decoder(ŷ))) .== Flux.onecold(y))
-#                for (ŷ, y) in zip(eachbatch(Ŷs, 32), eachbatch(ytest, 32)))
-#     @info "Accuracy = $(acc * 100)%"
-
-#     return recording
+#     @profview test(x, y, net, net_state, learners, learner_states)
 # end
