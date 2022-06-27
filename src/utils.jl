@@ -3,10 +3,13 @@ cpu(x::CuArray) = adapt(Array, x)
 gpu(x::AbstractArray) = adapt(CuArray, x)
 gpu(x::CuArray) = x
 
-concatenate(X, Y, Z) = vcat(X, Y, Z)
-unconcatenate(I) = I[1:Nx], I[(Nx + 1):(Nx + Ny)], I[(Nx + Ny + 1):end]
+cpu(x) = Flux.cpu(x)
+gpu(x) = Flux.gpu(x)
 
-_zero(::Type{T}, dims...) where {T<:AbstractArray} = adapt(T, zeros(eltype(T), dims...))
+concatenate(X, Y, Z) = vcat(X, Y, Z)
+# unconcatenate(I) = I[1:Nx], I[(Nx + 1):(Nx + Ny)], I[(Nx + Ny + 1):end]
+
+# _zero(::Type{T}, dims...) where {T<:AbstractArray} = adapt(T, zeros(eltype(T), dims...))
 
 trange(start, Δt, span) = start:Δt:(start + span - Δt)
 
@@ -22,18 +25,6 @@ function ηdecay(ηi::T; toffset = zero(ηi), rate = 25) where T
     η(t) = (t > toffset) ? ηi / (1 + (t - toffset) / rate) : zero(ηi)
 
     return η
-end
-
-# inplace push! for CircularBuffer
-@inline function push_inplace!(cb::CircularBuffer, data)
-    # if full, increment and overwrite, otherwise push
-    if cb.length == cb.capacity
-        cb.first = (cb.first == cb.capacity ? 1 : cb.first + 1)
-    else
-        cb.length += 1
-    end
-    @inbounds cb.buffer[DataStructures._buffer_index(cb, cb.length)] .= data
-    return cb
 end
 
 ## plot utils

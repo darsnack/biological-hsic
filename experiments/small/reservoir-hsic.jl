@@ -1,7 +1,7 @@
 using CairoMakie
 using CairoMakie: RGBA
 
-include("../src/experiments.jl")
+include("../../src/experiments.jl")
 
 # hardware target (cpu or gpu)
 target = gpu
@@ -68,7 +68,7 @@ lines!(train_plt1, recording.t[train_init_idx], first.(recording.z[train_init_id
         label = "Raw Readout", color = RGBA(0, 1, 0, 0.5))
 vlines!(train_plt1, [Tinit]; linestyle = :dash, color = :red, label = "Training Onset")
 
-test_init_plt1 = fig[2, 1] = Axis(fig; title = "Output 1 (Start of Testing)",
+test_init_plt1 = fig[1, 2] = Axis(fig; title = "Output 1 (Start of Testing)",
                                     xlabel = "Time (t)",
                                     ylabel = "Signal")
 lines!(test_init_plt1, recording.t[test_init_idx], first.(recording.f[test_init_idx]);
@@ -77,7 +77,7 @@ lines!(test_init_plt1, recording.t[test_init_idx], first.(recording.z[test_init_
         label = "Raw Readout", color = RGBA(0, 1, 0, 0.5))
 hideydecorations!(test_init_plt1; grid = false, ticks = false, ticklabels = false)
 
-test_final_plt1 = fig[3, 1] = Axis(fig; title = "Output 1 (End of Testing)",
+test_final_plt1 = fig[1, 3] = Axis(fig; title = "Output 1 (End of Testing)",
                                     xlabel = "Time (t)",
                                     ylabel = "Signal")
 lines!(test_final_plt1, recording.t[test_final_idx], first.(recording.f[test_final_idx]);
@@ -127,7 +127,7 @@ wplt = fig[4, :] = Axis(fig; title = "Readout Weight Norm",
                             ylabel = "norm(Wout)")
 lines!(wplt, recording.t, recording.wnorm; color = :blue)
 
-save("output/hsic-test.pdf", fig)
+CairoMakie.save("output/hsic-test.pdf", fig)
 
 ## PLOT CAMERA READY
 
@@ -151,7 +151,7 @@ lines!(train_plt1, recording.t[train_init_idx], first.(recording.zlpf[train_init
 lines!(train_plt1, recording.t[train_init_idx], first.(recording.z[train_init_idx]);
         label = "Raw Readout", color = RGBA(0, 1, 0, 0.5))
 vlines!(train_plt1, [Tinit]; linestyle = :dash, color = :red, label = "Training Onset")
-hidexdecorations!(test_init_plt1; grid = false, ticks = false, ticklabels = false)
+hidexdecorations!(train_plt1; grid = false, ticks = false, ticklabels = false)
 
 test_init_plt1 = fig[2, 1] = Axis(fig; title = "Output (Start of Testing)",
                                     xlabel = "Time (t)",
@@ -181,4 +181,4 @@ for (i, label) in enumerate(["A", "B", "C"])
         halign = :right)
 end
 
-CairoMakie.save("output/reservoir-hsic-test.pdf", fig)
+CairoMakie.save("output/reservoir-hsic.pdf", fig)

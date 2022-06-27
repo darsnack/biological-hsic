@@ -56,9 +56,17 @@ cpu(encoder::RateEncoder) = RateEncoder(cpu(encoder.data), encoder.Δt)
 gpu(encoder::RateEncoder) = RateEncoder(gpu(encoder.data), encoder.Δt)
 
 function rateencode(x, t; Δt)
-    i = (t < 0) ? 1 : (Int(round(t / Δt)) % nobs(x)) + 1
+    i = (t < 0) ? 1 : (Int(round(t / Δt)) % numobs(x)) + 1
 
     return getobs(x, i)
 end
 
 (encoder::RateEncoder)(t) = rateencode(encoder.data, t; Δt = encoder.Δt)
+
+subsample(data, fraction) = (fraction < 1) ? collect(stratifiedobs(data, fraction)[1]) : data
+
+function filter_classes(x, y, classes)
+    idx::Vector{Int} = findall(y -> any(y .== classes), y)
+
+    return getobs(x, idx), getobs(y, idx)
+end

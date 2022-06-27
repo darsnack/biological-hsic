@@ -44,10 +44,6 @@ end
 Reservoir{T}(inout::Pair, nhidden; kwargs...) where {T} =
     Reservoir{T}(inout[1], inout[2], nhidden; kwargs...)
 
-nin(reservoir::Reservoir) = size(reservoir.Win, 2)
-nout(reservoir::Reservoir) = size(reservoir.Wout, 1)
-nhidden(reservoir::Reservoir) = size(reservoir.Wfb, 1)
-
 Adapt.adapt_structure(to, reservoir::Reservoir) = Reservoir(adapt(to, reservoir.Wr),
                                                             adapt(to, reservoir.Win),
                                                             adapt(to, reservoir.Wfb),
@@ -60,17 +56,21 @@ Adapt.adapt_structure(to, reservoir::Reservoir) = Reservoir(adapt(to, reservoir.
 cpu(reservoir::Reservoir) = adapt(Array, reservoir)
 gpu(reservoir::Reservoir) = adapt(CuArray, reservoir)
 
+# insize(reservoir::Reservoir) = (size(reservoir.Win, 2),)
+outsize(reservoir::Reservoir) = (size(reservoir.Wout, 1),)
+hiddensize(reservoir::Reservoir) = (size(reservoir.Wr, 1),)
+
 struct ReservoirState{T}
     u::T
     r::T
     z::T
 end
 ReservoirState(reservoir::Reservoir{T}) where {T} =
-    ReservoirState(fill!(similar(reservoir.Wr, nhidden(reservoir)), zero(T)),
-                   similar(reservoir.Wr, nhidden(reservoir)),
-                   similar(reservoir.Wr, nout(reservoir)))
+    ReservoirState(fill!(similar(reservoir.Wr, hiddensize(reservoir)), zero(T)),
+                   similar(reservoir.Wr, hiddensize(reservoir)),
+                   similar(reservoir.Wr, outsize(reservoir)))
 
-state(reservoir::Reservoir) = ReservoirState(reservoir)
+state(reservoir::Reservoir, insize) = ReservoirState(reservoir)
 
 function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = true)
     # get hidden neuron firing rate
@@ -94,6 +94,19 @@ function (reservoir::Reservoir)(state::ReservoirState, input, t, Δt; explore = 
     return state
 end
 
+struct LowPassFilter{T, S}
+    τ::T
+    f̄::S
+end
+
+Adapt.adapt_structure(to, lpf::LowPassFilter) = LowPassFilter(lpf.τ, adapt(to, lpf.f̄))
+
+function (lpf::LowPassFilter)(f, Δt)
+    lpf.f̄ .= (1 - Δt / lpf.τ) * lpf.f̄ .+ (Δt / lpf.τ) * f
+
+    return lpf.f̄
+end
+
 struct RMHebb{F, S, R}
     η::F
     zlpf::S
@@ -105,7 +118,7 @@ function RMHebb(T, η, τ, N)
 
     RMHebb{typeof(η), typeof(zlpf), typeof(Plpf)}(η, zlpf, Plpf)
 end
-RMHebb(reservoir::Reservoir{T}; η, τ) where {T} = RMHebb(T, η, τ, nout(reservoir))
+RMHebb(reservoir::Reservoir{T}; η, τ) where {T} = RMHebb(T, η, τ, outsize(reservoir)...)
 
 Adapt.adapt_structure(to, learner::RMHebb) =
     RMHebb(learner.η, adapt(to, learner.zlpf), adapt(to, learner.Plpf))

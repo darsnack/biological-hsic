@@ -9,30 +9,38 @@ dist!(zs::AbstractMatrix, xs::AbstractMatrix) =
 dist(x::CuVector, y::CuVector) = norm(x .- y)^2
 dist(xs::CuMatrix, ys::CuMatrix) = @reduce _[i, j] := sum(μ) (xs[μ, i] .- ys[μ, j]).^2
 dist!(zs::CuMatrix, xs::CuMatrix, ys::CuMatrix) = @reduce zs[i, j] := sum(μ) (xs[μ, i] .- ys[μ, j]).^2
+dist!(zs::CuMatrix, xs::CuMatrix) = @reduce zs[i, j] := sum(μ) (xs[μ, i] .- xs[μ, j]).^2
 
 estσ(xs, ys) = Zygote.ignore() do
-    ϵ = convert(eltype(xs), 1e-2)
+    ϵ = convert(eltype(xs), 1e-3)
     d = filter(!iszero, triu!(dist(xs, ys), 1))
     isempty(d) && return ϵ
-    σ = mean(d)
+    σ = median(d)
 
     return max(σ, ϵ)
 end
 estσ(xs) = estσ(xs, xs)
 
-rbf(d, σ) = exp.(-d ./ (2 * σ^2))
+rbf(d, σ) = @avx exp.(d ./ (-2 * σ^2))
 function rbf!(K, d, σ)
-    K .= exp.(-d ./ (2 * σ^2))
+    @avx K .= exp.(d ./ (-2 * σ^2))
+
+    return K
+end
+
+rbf(d::CuArray, σ) = exp.(d ./ (-2 * σ^2))
+function rbf!(K::CuArray, d::CuArray, σ)
+    K .= exp.(d ./ (-2 * σ^2))
 
     return K
 end
 
 k_hsic(xs, ys; σ) = rbf(dist(xs, ys), σ)
-k_hsic(xs; σ) = rbf(dist(xs), σ^2)
+k_hsic(xs; σ) = rbf(dist(xs), σ)
 k_hsic!(K::AbstractMatrix, xs::AbstractMatrix, ys::AbstractMatrix; σ) = rbf!(K, dist!(K, xs, ys), σ)
 k_hsic!(K::AbstractMatrix, xs::AbstractMatrix; σ) = rbf!(K, dist!(K, xs), σ)
 
-hsic(Kx, Ky, H) = tr(Kx * H * Ky * H) / (size(Kx, 1) - 1)^2
+hsic(Kx, Ky, H) = @avx tr(Kx * H * Ky * H) / (size(Kx, 1) - 1)^2
 
 function hsic(X, Y; σx = estσ(X), σy = estσ(Y))
     N = size(X, 2)

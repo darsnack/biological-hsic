@@ -1,51 +1,35 @@
-function run!(step!, data, args...; nepochs = 1, bs = 1, shuffle = true, progress = nothing)
-    progressname = isnothing(progress) ? "" : progress
+function run!(step!::F, data, args...;
+              nepochs = 1, bs = 1, shuffle = true, progress = nothing) where F
+    progressname, progressrate = isnothing(progress) ? ("", 0) : progress
+    progressi = 0
+    n = nepochs * floor(Int, numobs(data) / bs)
     @withprogress name=progressname begin
         for epoch in 1:nepochs
-            @info "Starting epoch $epoch ..."
+            @info "($progressname): Starting epoch $epoch ..."
 
             dataloader = shuffle ? shuffleobs(data) : data
-            dataloader = (bs > 1) ? eachbatch(dataloader, bs) : eachobs(dataloader)
-            for (i, (x, y)) in enumerate(dataloader)
+            for (i, (x, y)) in enumerate(eachobs(dataloader; batchsize = bs))
                 step!(i, x, y, args...)
+                progressi += 1
 
-                !isnothing(progress) &&
-                    @logprogress ((epoch - 1) * nobs(dataloader) + i) / (nepochs * nobs(dataloader))
+                !isnothing(progress) && (mod(progressi - 1, progressrate) == 0) &&
+                    @logprogress progressi / n
             end
         end
     end
 end
 
-function run_dagger!(step!, data, args...; nepochs = 1, bs = 1, shuffle = true, progress = nothing)
-    progressname = isnothing(progress) ? "" : progress
-    @withprogress name=progressname begin
-        for epoch in 1:nepochs
-            @info "Starting epoch $epoch ..."
-
-            dataloader = shuffle ? shuffleobs(data) : data
-            dataloader = (bs > 1) ? eachbatch(dataloader, bs) : eachobs(dataloader)
-            for (i, (x, y)) in enumerate(dataloader)
-                blockers = step!(i, x, y, args...)
-                foreach(b -> wait(b), blockers)
-
-                !isnothing(progress) &&
-                    @logprogress ((epoch - 1) * nobs(dataloader) + i) / (nepochs * nobs(dataloader))
-            end
-        end
-    end
-end
-
-function run!(step!, ts::AbstractVector, args...)
+function run!(step!::F, ts::AbstractVector, args...) where F
     for t in ts
         step!(t, args...)
     end
 end
 
-function predict(net, xs, ys)
+function predict(net, xs, ys; Δt, Δtsample, progress = "TEST")
     ŷs = similar(ys, Float32)
     net = net |> cpu
-    net_state = state(net)
-    run!((xs, ys), net, net_state; shuffle = false, progress = "TEST") do i, x, _, net, net_state
+    net_state = state(net, size(getobs(xs, 1)))
+    run!((xs, ys), net, net_state; shuffle = false, progress = progress) do i, x, _, net, net_state
         z = mean(last(net(net_state, x, t, Δt)) for t in 0:Δt:Δtsample)
         ŷs[:, i] .= z
     end
@@ -53,11 +37,18 @@ function predict(net, xs, ys)
     return ŷs
 end
 
-
 function fitdecoder!(decoder, ŷs, ys; nepochs = 1000, batchsize = 32, opt = Momentum())
-    loss(y, ŷ) = Flux.Losses.logitcrossentropy(decoder(ŷ), y)
+    loss(y, ŷ) = let decoder = decoder
+        Flux.Losses.logitcrossentropy(decoder(ŷ), y)
+    end
+    ps = Flux.params(decoder)
     for _ in 1:nepochs
-        Flux.train!(loss, Flux.params(decoder), eachbatch((ys, ŷs), batchsize), opt)
+        for d in eachobs((ys, ŷs); batchsize = batchsize)
+            gs = gradient(ps) do
+                loss(d...)
+            end
+            Flux.update!(opt, ps, gs)
+        end
     end
 
     return decoder
