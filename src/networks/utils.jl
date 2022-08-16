@@ -5,6 +5,26 @@ outsize(chain::Tuple, insize) = outsize([chain...], insize)
 
 iterate_pairs(itr) = zip(itr[1:(end - 1)], itr[2:end])
 
+function uniform_init(rng::AbstractRNG, dims::Integer...; a = -1, b = 1)
+  shift = Float32(a)
+  scale = Float32(b - a)
+
+  return scale .* rand(rng, Float32, dims...) .+ shift
+end
+uniform_init(dims::Integer...; kwargs...) = uniform_init(rng_from_array(), dims...; kwargs...)
+uniform_init(rng::AbstractRNG = Flux.rng_from_array(); init_kwargs...) =
+    (dims...; kwargs...) -> uniform_init(rng, dims...; init_kwargs..., kwargs...)
+
+function uniform_init(rng::AbstractRNG, dims::Integer...; a = -1, b = 1)
+  shift = Float32(a)
+  scale = Float32(b - a)
+
+  return scale .* rand(rng, Float32, dims...) .+ shift
+end
+uniform_init(dims::Integer...; kwargs...) = uniform_init(rng_from_array(), dims...; kwargs...)
+uniform_init(rng::AbstractRNG = Flux.rng_from_array(); init_kwargs...) =
+    (dims...; kwargs...) -> uniform_init(rng, dims...; init_kwargs..., kwargs...)
+
 function conv_chain(ksize, conv_config, param_config, act = relu)
     convs = Any[Conv(ksize, conv_config[1] => conv_config[2], act; param_config[1]...)]
     inchannels = conv_config[2]

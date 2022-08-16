@@ -16,8 +16,10 @@ using LinearAlgebra
 using TensorCast
 using TensorCast: @reduce
 using Flux
-using Flux: Zygote
+using Flux: Zygote, @functor
 using MLUtils, MLDatasets
+using FluxTraining
+using FluxTraining: AbstractTrainingPhase
 using CircularArrayBuffers
 using NNlib
 using BangBang

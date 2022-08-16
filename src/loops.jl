@@ -1,3 +1,15 @@
+struct RateEncoded{T<:AbstractTrainingPhase, S<:Real} <: AbstractTrainingPhase
+    phase::T
+    Δt::S
+    Δtsample::S
+end
+
+function FluxTraining.step!(learner, phase::RateEncodedTrainingPhase, batch)
+    for _ in 0:Δt:phase.Δtsample
+        FluxTraining.step!(learner, phase.phase, batch)
+    end
+end
+
 function run!(step!::F, data, args...;
               nepochs = 1, bs = 1, shuffle = true, progress = nothing) where F
     progressname, progressrate = isnothing(progress) ? ("", 0) : progress
