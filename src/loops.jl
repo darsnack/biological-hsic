@@ -19,23 +19,22 @@ function FluxTraining.step!(learner, phase::RateEncodedTrainingPhase, batch)
     end
 end
 
-struct RMHebbTrainingPhase{T<:RMHebb} <: AbstractTrainingPhase
+struct RMHebbTraining{T<:RMHebb} <: AbstractTrainingPhase
     rmhebb::T
 end
 
-function FluxTraining.step!(learner, phase::RMHebbTrainingPhase, batch)
-    xs, ys = batch
-    Flux.runstep(learner, phase, (xs = xs, ys = ys)) do handle, state
-        state.ŷs = similar(state.ys)
+function FluxTraining.step!(learner, phase::RMHebbTraining, sample)
+    x, y = sample
+    Flux.runstep(learner, phase, (xs = x, ys = y)) do handle, state
         state.grads = initialize_grads(learner.ps)
-        for (i, (x, y)) in enumerate(eachobs((state.xs, state.ys)))
-            state.ŷs[:, i] .= learner.model(x)
-            dWout = phase.rmhebb(learner.model.state, state.ŷs[:, i], y)
-            state.grads[learner.model.cell.Wout] .+= dWout
-            Flux.Optimise.update!(learner.optimizer, learner.model.cell.Wout, dWout)
-        end
+        handle(FluxTraining.LossBegin())
+        state.ŷs = learner.model(state.xs)
         state.loss = learner.lossfn(state.ŷs, state.ys)
-        handle(FluxTraining.BackwardEnd()) # we can't really register other events
+        handle(FluxTraining.BackwardBegin())
+        dWout = phase.rmhebb(learner.model.state, state.ŷs, state.ys)
+        state.grads[learner.model.cell.Wout] .+= dWout
+        handle(FluxTraining.BackwardEnd())
+        Flux.Optimise.update!(learner.optimizer, learner.model.cell.Wout, dWout)
     end
 end
 

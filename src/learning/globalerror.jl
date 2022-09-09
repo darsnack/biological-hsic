@@ -1,28 +1,28 @@
 struct GlobalError{T, S, R, Q}
-    γ::T
+    ξxy::T
     α::S
     ξ::R
-    λ::Q
+    γ::Q
 end
-GlobalError{T}(bs, n; λ = 2) where {T} =
-    GlobalError(zeros(T, bs), zeros(T, bs, n), zeros(T, n), λ)
+GlobalError{T}(bs, n, γ = 2) where {T} =
+    GlobalError(zeros(T, bs), zeros(T, bs, n), zeros(T, n), γ)
 
-Adapt.adapt_structure(to, error::GlobalError) = GlobalError(adapt(to, error.γ),
+Adapt.adapt_structure(to, error::GlobalError) = GlobalError(adapt(to, error.ξxy),
                                                             adapt(to, error.α),
                                                             adapt(to, error.ξ),
-                                                            error.λ)
+                                                            error.γ)
 
 function (error::GlobalError)(kx, ky, kz, z; σz = estσ(z))
-    bs = size(error.γ, 1)
+    bs = size(error.ξxy, 1)
 
-    @cast error.γ[i] = (kx[i] - @reduce sum(k) kx[k] / bs) -
-                        error.λ * (ky[i] - @reduce sum(k) ky[k] / bs)
+    @cast error.ξxy[i] = (kx[i] - @reduce sum(k) kx[k] / bs) -
+                        error.γ * (ky[i] - @reduce sum(k) ky[k] / bs)
 
 
     @cast error.α[i, k] = -2 * kz[i] * (z[k, 1] - z[k, i]) / σz^2
     @cast error.α[i, k] = error.α[i, k] - @reduce _[k] := sum(n) error.α[n, k] / bs
 
-    @reduce error.ξ[k] = sum(i) error.γ[i] * error.α[i, k] / (bs - 1)^2
+    @reduce error.ξ[k] = sum(i) error.ξxy[i] * error.α[i, k] / (bs - 1)^2
 
     return error.ξ
 end
@@ -34,7 +34,7 @@ function (error::GlobalError)(Kx::AbstractMatrix, Ky::AbstractMatrix, Kz::Abstra
     return error(kx, ky, kz, z; kwargs...)
 end
 
-struct HSICApprox{T<:NTuple{<:Any, <:KernelCache}, S<:GlobalError}
+struct HSICApprox{T<:NTuple{3, <:KernelCache}, S<:GlobalError}
     kernels::T
     error::S
 end
@@ -44,7 +44,7 @@ function HSICApprox(::Type{T}, Din, Dout, Dlayer, bs::Integer;
     kernels = (KernelCache(T, Din, bs, nbuffer, sigmas[1]),
                KernelCache(T, Dout, bs, nbuffer, sigmas[2]),
                KernelCache(T, Dlayer, bs, nbuffer, sigmas[3]))
-    error = GlobalError{T}(bs, prod(Dlayer); λ = γ)
+    error = GlobalError{T}(bs, prod(Dlayer), γ)
 
     return HSICApprox(kernels, error)
 end
