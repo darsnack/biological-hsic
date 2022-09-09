@@ -1,3 +1,12 @@
+function initialize_grads(ps::Zygote.Params)
+    cache = IdDict{Any, Any}()
+    for p in ps
+        cache[p] = zero(p)
+    end
+
+    return Zygote.Grads(cache, ps)
+end
+
 struct RateEncoded{T<:AbstractTrainingPhase, S<:Real} <: AbstractTrainingPhase
     phase::T
     Δt::S
@@ -9,6 +18,27 @@ function FluxTraining.step!(learner, phase::RateEncodedTrainingPhase, batch)
         FluxTraining.step!(learner, phase.phase, batch)
     end
 end
+
+struct RMHebbTrainingPhase{T<:RMHebb} <: AbstractTrainingPhase
+    rmhebb::T
+end
+
+function FluxTraining.step!(learner, phase::RMHebbTrainingPhase, batch)
+    xs, ys = batch
+    Flux.runstep(learner, phase, (xs = xs, ys = ys)) do handle, state
+        state.ŷs = similar(state.ys)
+        state.grads = initialize_grads(learner.ps)
+        for (i, (x, y)) in enumerate(eachobs((state.xs, state.ys)))
+            state.ŷs[:, i] .= learner.model(x)
+            dWout = phase.rmhebb(learner.model.state, state.ŷs[:, i], y)
+            state.grads[learner.model.cell.Wout] .+= dWout
+            Flux.Optimise.update!(learner.optimizer, learner.model.cell.Wout, dWout)
+        end
+        state.loss = learner.lossfn(state.ŷs, state.ys)
+        handle(FluxTraining.BackwardEnd()) # we can't really register other events
+    end
+end
+
 
 function run!(step!::F, data, args...;
               nepochs = 1, bs = 1, shuffle = true, progress = nothing) where F

@@ -1,15 +1,21 @@
 dist(x::AbstractVector, y::AbstractVector) = sqeuclidean(x, y)
-dist(xs::AbstractMatrix, ys::AbstractMatrix) = pairwise(SqEuclidean(), xs, ys; dims = 2)
+dist(x::AbstractVector, y::AbstractMatrix) = colwise(SqEuclidean(), x, y)
+dist(xs::AbstractMatrix, ys::AbstractMatrix) =
+    pairwise(SqEuclidean(), xs, ys; dims = 2)
 dist(xs::AbstractMatrix) = pairwise(SqEuclidean(), xs; dims = 2)
+dist!(z::AbstractVector, x::AbstractVector, ys::AbstractMatrix) =
+    colwise!(z, SqEuclidean(), x, ys)
 dist!(zs::AbstractMatrix, xs::AbstractMatrix, ys::AbstractMatrix) =
     pairwise!(zs, SqEuclidean(), xs, ys; dims = 2)
 dist!(zs::AbstractMatrix, xs::AbstractMatrix) =
     pairwise!(zs, SqEuclidean(), xs; dims = 2)
 
 dist(x::CuVector, y::CuVector) = norm(x .- y)^2
-dist(xs::CuMatrix, ys::CuMatrix) = @reduce _[i, j] := sum(μ) (xs[μ, i] .- ys[μ, j]).^2
-dist!(zs::CuMatrix, xs::CuMatrix, ys::CuMatrix) = @reduce zs[i, j] := sum(μ) (xs[μ, i] .- ys[μ, j]).^2
-dist!(zs::CuMatrix, xs::CuMatrix) = @reduce zs[i, j] := sum(μ) (xs[μ, i] .- xs[μ, j]).^2
+dist(x::CuVector, ys::CuMatrix) = @reduce _[i] := sum(μ) (x[μ] - ys[μ, i])^2
+dist(xs::CuMatrix, ys::CuMatrix) = @reduce _[i, j] := sum(μ) (xs[μ, i] - ys[μ, j])^2
+dist!(z::CuVector, x::CuVector, ys::CuMatrix) = @reduce z[i] = sum(μ) (x[μ] - ys[μ, i])^2
+dist!(zs::CuMatrix, xs::CuMatrix, ys::CuMatrix) = @reduce zs[i, j] = sum(μ) (xs[μ, i] - ys[μ, j])^2
+dist!(zs::CuMatrix, xs::CuMatrix) = @reduce zs[i, j] = sum(μ) (xs[μ, i] - xs[μ, j])^2
 
 estσ(xs, ys) = Zygote.ignore() do
     ϵ = convert(eltype(xs), 1e-3)
@@ -37,8 +43,8 @@ end
 
 k_hsic(xs, ys; σ) = rbf(dist(xs, ys), σ)
 k_hsic(xs; σ) = rbf(dist(xs), σ)
-k_hsic!(K::AbstractMatrix, xs::AbstractMatrix, ys::AbstractMatrix; σ) = rbf!(K, dist!(K, xs, ys), σ)
-k_hsic!(K::AbstractMatrix, xs::AbstractMatrix; σ) = rbf!(K, dist!(K, xs), σ)
+k_hsic!(K, xs, ys; σ) = rbf!(K, dist!(K, xs, ys), σ)
+k_hsic!(K, xs; σ) = rbf!(K, dist!(K, xs), σ)
 
 hsic(Kx, Ky, H) = @avx tr(Kx * H * Ky * H) / (size(Kx, 1) - 1)^2
 

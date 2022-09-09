@@ -53,12 +53,12 @@ ReservoirCell{T}(inout::Pair, nhidden; kwargs...) where {T} =
 
 # state(reservoir::Reservoir, insize) = ReservoirState(reservoir)
 
-function (reservoir::ReservoirCell)(u, x)
+function (reservoir::ReservoirCell)((u, z), x)
     ξh, ξo = reservoir.hidden_noise, reservoir.output_noise
 
     # get hidden neuron firing rate
     r = iszero(ξh) ? zero(u) : 2 .* ξh .+ rand!(similar(u)) .- ξh
-    r .+= tanh.(state.u)
+    r .+= tanh.(u)
 
     # get output neuron firing rate
     # if explore
@@ -67,7 +67,8 @@ function (reservoir::ReservoirCell)(u, x)
     # else
     #     state.z .= reservoir.Wout * state.r
     # end
-    z = iszero(ξo) ? zero(u) : 2 .* ξo .+ rand!(similar(u)) .- ξo
+    # always explore
+    z .= iszero(ξo) ? 0 : 2 .* ξo .+ rand!(similar(u)) .- ξo
     z .+= reservoir.Wout * r
 
     # update du
@@ -76,7 +77,7 @@ function (reservoir::ReservoirCell)(u, x)
     du .+= reservoir.Wfb * z
     u .+= Δt .* (-u .+ du) ./ reservoir.τ
 
-    return u, r
+    return (u = u, z = z), r
 end
 
 @functor ReservoirCell
