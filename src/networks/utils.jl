@@ -21,7 +21,8 @@ function uniform_init(rng::AbstractRNG, dims::Integer...; a = -1, b = 1)
 
   return scale .* rand(rng, Float32, dims...) .+ shift
 end
-uniform_init(dims::Integer...; kwargs...) = uniform_init(rng_from_array(), dims...; kwargs...)
+uniform_init(dims::Integer...; kwargs...) =
+    uniform_init(Flux.rng_from_array(), dims...; kwargs...)
 uniform_init(rng::AbstractRNG = Flux.rng_from_array(); init_kwargs...) =
     (dims...; kwargs...) -> uniform_init(rng, dims...; init_kwargs..., kwargs...)
 

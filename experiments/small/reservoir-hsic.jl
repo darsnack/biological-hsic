@@ -1,49 +1,56 @@
 using CairoMakie
 using CairoMakie: RGBA
+using Dates: now
 
-include("../../src/experiments.jl")
+include("../../src/setup.jl")
+include("../../src/experiments/reservoir_test.jl")
 
 # hardware target (cpu or gpu)
 target = gpu
+CUDA.device!(1) # adjust this to control which GPU is used
 
 ## PROBLEM PARAMETERS
 
-η0 = 1f-4
+η0 = 1f-4 # initial LR
+γ = 2 # HSIC balance parameter
 τ = 50f-3 # LIF time constant
 λ = 1.2 # chaotic level
 τavg = 5f-3 # signal smoothing constant
-Tinit = 50f0 # warmup time
-Ttrain = 500f0 # training time
-Ttest = 100f0 # testing time
+train_epochs = 100 # training time
+test_epochs = 10 # testing time
 Δt = 1f-3 # simulation time step
-Nsamples = 100 # number of data samples
 Δtsample = 50f-3 # time to present each data sample
 bs = 6 # effective batch size
-Nhidden = 2000
+Nsamples = 100 # number of data samples
+Nhidden = 2000 # number of hidden neurons in reservoir
 
 # input data
 Nx = 100
 Ny = 1
 Nz = 10
-X = rand(Float32, Nx, Nsamples) |> target
-Y = rand(Float32, Ny, Nsamples) |> target
-Z = rand(Float32, Nz, Nsamples) |> target
+X = rand(Float32, Nx, Nsamples)
+Y = rand(Float32, Ny, Nsamples)
+Z = rand(Float32, Nz, Nsamples)
 
 ## EXPERIMENT
 
-recording = reservoir_test(X, Y, Z, target;
+logger = WandbBackend(project = "biological-hsic", name = "reservoir-test-$(now())")
+recording = reservoir_test((X, Y, Z), Nhidden, target;
                            η0 = η0,
+                           γ = γ,
                            τ = τ,
                            λ = λ,
                            τavg = τavg,
-                           Tinit = Tinit,
-                           Ttrain = Ttrain,
-                           Ttest = Ttest,
+                           train_epochs = train_epochs,
+                           test_epochs = test_epochs,
                            Δt = Δt,
-                           Nsamples = Nsamples,
-                           Nhidden = Nhidden,
                            Δtsample = Δtsample,
-                           bs = bs)
+                           bs = bs,
+                           logger = logger)
+
+## CLEANUP
+
+close(logger)
 
 ## PLOT RESULTS
 

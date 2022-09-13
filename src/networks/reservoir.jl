@@ -53,11 +53,11 @@ ReservoirCell{T}(inout::Pair, nhidden; kwargs...) where {T} =
 
 # state(reservoir::Reservoir, insize) = ReservoirState(reservoir)
 
-function (reservoir::ReservoirCell)((u, z), x)
+function (reservoir::ReservoirCell)((u, r, z), x)
     ξh, ξo = reservoir.hidden_noise, reservoir.output_noise
 
     # get hidden neuron firing rate
-    r = iszero(ξh) ? zero(u) : 2 .* ξh .+ rand!(similar(u)) .- ξh
+    r .= iszero(ξh) ? 0 : 2 .* ξh .+ rand!(r) .- ξh
     r .+= tanh.(u)
 
     # get output neuron firing rate
@@ -68,7 +68,7 @@ function (reservoir::ReservoirCell)((u, z), x)
     #     state.z .= reservoir.Wout * state.r
     # end
     # always explore
-    z .= iszero(ξo) ? 0 : 2 .* ξo .+ rand!(similar(u)) .- ξo
+    z .= iszero(ξo) ? 0 : 2 .* ξo .+ rand!(z) .- ξo
     z .+= reservoir.Wout * r
 
     # update du
@@ -77,11 +77,11 @@ function (reservoir::ReservoirCell)((u, z), x)
     du .+= reservoir.Wfb * z
     u .+= Δt .* (-u .+ du) ./ reservoir.τ
 
-    return (u = u, z = z), r
+    return (u, r, z), z
 end
 
 @functor ReservoirCell
 Flux.trainable(reservoir::ReservoirCell) = (Wout = reservoir.Wout,)
 
-Reservoir(args...; init_state, kwargs...) =
-    Recur(ReservoirCell(args...; kwargs...), init_state)
+Reservoir(::Type{T}, args...; init_state, kwargs...) where T =
+    Recur(ReservoirCell{T}(args...; kwargs...), init_state)

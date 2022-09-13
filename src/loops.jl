@@ -13,7 +13,7 @@ struct RateEncoded{T<:AbstractTrainingPhase, S<:Real} <: AbstractTrainingPhase
     Δtsample::S
 end
 
-function FluxTraining.step!(learner, phase::RateEncodedTrainingPhase, batch)
+function FluxTraining.step!(learner, phase::RateEncoded, batch)
     for _ in 0:Δt:phase.Δtsample
         FluxTraining.step!(learner, phase.phase, batch)
     end
@@ -25,13 +25,13 @@ end
 
 function FluxTraining.step!(learner, phase::RMHebbTraining, sample)
     x, y = sample
-    Flux.runstep(learner, phase, (xs = x, ys = y)) do handle, state
-        state.grads = initialize_grads(learner.ps)
+    FluxTraining.runstep(learner, phase, (xs = x, ys = y)) do handle, state
+        state.grads = initialize_grads(learner.params)
         handle(FluxTraining.LossBegin())
         state.ŷs = learner.model(state.xs)
         state.loss = learner.lossfn(state.ŷs, state.ys)
         handle(FluxTraining.BackwardBegin())
-        dWout = phase.rmhebb(learner.model.state, state.ŷs, state.ys)
+        dWout = phase.rmhebb(learner.model.state, state.ys)
         state.grads[learner.model.cell.Wout] .+= dWout
         handle(FluxTraining.BackwardEnd())
         Flux.Optimise.update!(learner.optimizer, learner.model.cell.Wout, dWout)

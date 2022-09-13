@@ -13,9 +13,9 @@ function (lpf::LowPassFilter)(f)
     return lpf.f̄
 end
 
-struct RMHebb{T}
+struct RMHebb{T, S}
     zlpf::T
-    Plpf::T
+    Plpf::S
 end
 
 function RMHebb(T, τ, Δt, N)
@@ -31,14 +31,14 @@ RMHebb(reservoir::Recur{<:ReservoirCell{T}}; τ) where T =
 Adapt.adapt_structure(to, learner::RMHebb) =
     RMHebb(adapt(to, learner.zlpf), learner.Plpf)
 
-function (learner::RMHebb)((u, z), r, target)
-    P = -sum((z .- f).^2)
-    P̄ = learner.Plpf(P, Δt)
+function (learner::RMHebb)((u, r, z), target)
+    P = -sum((z .- target).^2)
+    P̄ = learner.Plpf(P)
     M = Int(P > only(P̄))
 
-    z̄ = learner.zlpf(z, Δt)
+    z̄ = learner.zlpf(z)
 
-    dWout = M .* (z - z̄) * transpose(r)
+    dWout = M .* (z .- z̄) * transpose(r)
 
     return dWout
 end
