@@ -13,7 +13,7 @@ function (lif::LIFCell)(u, x)
     y = lif.forward(x)
     u += (lif.Δt / lif.τ) .* (y - u)
     σ, ξ = NNlib.fast_act(activation), lif.firing_noise
-    r = iszero(ξ) ? zero(u) : 2 .* ξ .+ rand!(similar(u)) .- ξ
+    r = iszero(ξ) ? zero(u) : 2 .* ξ .* rand!(similar(u)) .- ξ
 
     return u, σ.(u) .+ r
 end

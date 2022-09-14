@@ -6,8 +6,8 @@ include("../../src/setup.jl")
 include("../../src/experiments/reservoir_test.jl")
 
 # hardware target (cpu or gpu)
-target = gpu
-CUDA.device!(1) # adjust this to control which GPU is used
+target = cpu
+# CUDA.device!(1) # adjust this to control which GPU is used
 
 ## PROBLEM PARAMETERS
 
@@ -17,10 +17,12 @@ CUDA.device!(1) # adjust this to control which GPU is used
 λ = 1.2 # chaotic level
 τavg = 5f-3 # signal smoothing constant
 train_epochs = 100 # training time
-test_epochs = 10 # testing time
+test_epochs = 5 # testing time
 Δt = 1f-3 # simulation time step
 Δtsample = 50f-3 # time to present each data sample
 bs = 6 # effective batch size
+hidden_noise = 5f-6 # reservoir hidden noise
+output_noise = 1f-2 # reservoir exploratory noise
 Nsamples = 100 # number of data samples
 Nhidden = 2000 # number of hidden neurons in reservoir
 
@@ -46,6 +48,8 @@ recording = reservoir_test((X, Y, Z), Nhidden, target;
                            Δt = Δt,
                            Δtsample = Δtsample,
                            bs = bs,
+                           hidden_noise = hidden_noise,
+                           output_noise = output_noise,
                            logger = logger)
 
 ## CLEANUP

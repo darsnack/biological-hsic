@@ -516,11 +516,11 @@ version = "0.13.5"
 
 [[deps.FluxTraining]]
 deps = ["BSON", "ChainRulesCore", "DataStructures", "EarlyStopping", "Flux", "Glob", "Graphs", "ImageCore", "InlineTest", "OnlineStats", "Optimisers", "ParameterSchedulers", "Parameters", "PrettyTables", "ProgressMeter", "Reexport", "Setfield", "Statistics", "TensorBoardLogger", "UUIDs", "ValueHistories", "Zygote"]
-git-tree-sha1 = "4e70c45eb785bbce8f4ee83be65c3f1abb185067"
-repo-rev = "log-value"
+git-tree-sha1 = "e48b875e8206e1a26799c25a77a709a3f1eadade"
+repo-rev = "metrics-printer-overflow"
 repo-url = "https://github.com/darsnack/FluxTraining.jl"
 uuid = "7bf95e4d-ca32-48da-9824-f0dc5310474f"
-version = "0.3.2"
+version = "0.3.3"
 
 [[deps.FoldsCUDA]]
 deps = ["CUDA", "InitialValues", "Transducers", "UnionArrays"]

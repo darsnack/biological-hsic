@@ -4,10 +4,10 @@ using CUDA
 CUDA.allowscalar(false)
 # using FLoops, FoldsCUDA
 
-using ProgressLogging
-using Logging: global_logger, with_logger
-using TerminalLoggers: TerminalLogger
-global_logger(TerminalLogger())
+# using ProgressLogging
+# using Logging: global_logger, with_logger
+# using TerminalLoggers: TerminalLogger
+# global_logger(TerminalLogger())
 
 using BangBang
 using CircularArrays
@@ -22,6 +22,7 @@ using FluxTraining: AbstractTrainingPhase
 using LinearAlgebra
 using MLUtils, MLDatasets
 using NNlib
+using ParameterSchedulers
 using TensorCast
 using TensorCast: @reduce
 using Wandb

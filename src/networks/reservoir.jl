@@ -10,12 +10,15 @@ struct ReservoirCell{T, S<:AbstractMatrix{T}}
     Δt::T
 end
 function ReservoirCell{T}(nin, nout, nhidden;
-                          τ = 10e-3, λ = 1.2, Δt = 1,
-                          sparsity = 0.1, hidden_noise = 0.05, output_noise = 0.5) where T
+                          τ = 10e-3, λ = 1.2, Δt = 1e-3,
+                          sparsity = 0.1, hidden_noise = 5e-2, output_noise = 5e-1) where T
     # initial values
     Wr = convert.(T, Flux.sparse_init(nhidden, nhidden;
                                       sparsity = sparsity,
-                                      std = sqrt(1 / sparsity * nhidden)))
+                                      std = sqrt(1 / (sparsity * nhidden))))
+    # Wr_mask = rand(T, nhidden, nhidden) .< sparsity
+    # Wr = randn(T, nhidden, nhidden) * T(sqrt(1 / (sparsity * nhidden)))
+    # Wr .*= Wr_mask
     Win = convert.(T, uniform_init(nhidden, nin))
     Wfb = convert.(T, uniform_init(nhidden, nout))
     Wout = zeros(T, nout, nhidden)
@@ -57,7 +60,7 @@ function (reservoir::ReservoirCell)((u, r, z), x)
     ξh, ξo = reservoir.hidden_noise, reservoir.output_noise
 
     # get hidden neuron firing rate
-    r .= iszero(ξh) ? 0 : 2 .* ξh .+ rand!(r) .- ξh
+    r .= iszero(ξh) ? 0 : (2 .* ξh .* rand!(r) .- ξh)
     r .+= tanh.(u)
 
     # get output neuron firing rate
@@ -68,14 +71,14 @@ function (reservoir::ReservoirCell)((u, r, z), x)
     #     state.z .= reservoir.Wout * state.r
     # end
     # always explore
-    z .= iszero(ξo) ? 0 : 2 .* ξo .+ rand!(z) .- ξo
+    z .= iszero(ξo) ? 0 : (2 .* ξo .* rand!(z) .- ξo)
     z .+= reservoir.Wout * r
 
     # update du
     du = reservoir.λ * reservoir.Wr * r
     du .+= reservoir.Win * x
     du .+= reservoir.Wfb * z
-    u .+= Δt .* (-u .+ du) ./ reservoir.τ
+    u .+= reservoir.Δt .* (-u .+ du) ./ reservoir.τ
 
     return (u, r, z), z
 end
