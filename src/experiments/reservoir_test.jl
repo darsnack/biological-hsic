@@ -2,6 +2,9 @@ function prepare_reservoir_data(X::T, Y::T, Z::T; bs, γ) where {S, T<:AbstractM
     Nx, Ny, Nz = size(X, 1), size(Y, 1), size(Z, 1)
     Nout = size(Z, 1)
 
+    # shuffle the observations
+    # X, Y, Z = shuffleobs((X, Y, Z))
+
     # precompute kernel matrices
     # σx = estσ(X)
     # σy = estσ(Y)
@@ -53,9 +56,6 @@ function reservoir_test((X, Y, Z), Nhidden, target;
         update_config!(logger, config)
     end
 
-    # prepare reservoir input/output data
-    data = prepare_reservoir_data(X, Y, Z; bs = bs, γ = γ)
-
     # build reservoir
     Nin = size(X, 1) + size(Y, 1) + size(Z, 1)
     Nout = size(Z, 1)
@@ -66,8 +66,8 @@ function reservoir_test((X, Y, Z), Nhidden, target;
 
     # build learner
     opt = Descent(η0)
-    sched = Sequence(zero(η0) => 1, Exp(η0, 5f-1) => train_epochs)
-    nsteps_per_epoch = numobs(data) * ceil(Int, Δtsample / Δt)
+    sched = Sequence(zero(η0) => 1, Step(η0, 8f-1, 10) => train_epochs)
+    nsteps_per_epoch = numobs(X) * ceil(Int, Δtsample / Δt)
     tracecb = Traces((predicted = learner -> cpu(learner.step.ŷs)[1],
                       trueoutput = learner -> cpu(learner.step.ys)[1]))
     cbs = [Recorder(),
@@ -90,11 +90,19 @@ function reservoir_test((X, Y, Z), Nhidden, target;
     training_scheme = RateEncoded(RMHebbTraining(rmhebb), Δt, Δtsample)
     for epoch in 1:train_epochs
         @info "Starting train epoch $epoch ..."
+        # prepare reservoir input/output data
+        data = prepare_reservoir_data(X, Y, Z; bs = bs, γ = γ)
         epoch!(learner, training_scheme, data)
     end
 
     # test model
-    # for epoch in 1:test_epochs
-    #     @info "Starting test epoch $epoch ..."
-        
+    validation_scheme = RateEncoded(RMHebbValidation(rmhebb), Δt, Δtsample)
+    for epoch in 1:test_epochs
+        @info "Starting test epoch $epoch ..."
+        # prepare reservoir input/output data
+        data = prepare_reservoir_data(X, Y, Z; bs = bs, γ = γ)
+        epoch!(learner, validation_scheme, data)
+    end
+
+    return learner, training_scheme, validation_scheme
 end

@@ -13,6 +13,7 @@ dist!(zs::AbstractMatrix, xs::AbstractMatrix) =
 dist(x::CuVector, y::CuVector) = norm(x .- y)^2
 dist(x::CuVector, ys::CuMatrix) = @reduce _[i] := sum(μ) (x[μ] - ys[μ, i])^2
 dist(xs::CuMatrix, ys::CuMatrix) = @reduce _[i, j] := sum(μ) (xs[μ, i] - ys[μ, j])^2
+dist(xs::CuMatrix) = @reduce _[i, j] := sum(μ) (xs[μ, i] - xs[μ, j])^2
 dist!(z::CuVector, x::CuVector, ys::CuMatrix) = @reduce z[i] = sum(μ) (x[μ] - ys[μ, i])^2
 dist!(zs::CuMatrix, xs::CuMatrix, ys::CuMatrix) = @reduce zs[i, j] = sum(μ) (xs[μ, i] - ys[μ, j])^2
 dist!(zs::CuMatrix, xs::CuMatrix) = @reduce zs[i, j] = sum(μ) (xs[μ, i] - xs[μ, j])^2

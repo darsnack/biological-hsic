@@ -7,7 +7,7 @@ function initialize_grads(ps::Zygote.Params)
     return Zygote.Grads(cache, ps)
 end
 
-struct RateEncoded{T<:AbstractTrainingPhase, S<:Real} <: AbstractTrainingPhase
+struct RateEncoded{T<:Phase, S<:Real} <: Phase
     phase::T
     Δt::S
     Δtsample::S
@@ -17,9 +17,14 @@ function Base.show(io::IO, phase::RateEncoded)
     print(io, "RateEncoded(")
     print(io, phase.phase)
     print(io, ", ")
-    print(io, ceil(Int, phase.Δtsample / phase.Δt))
+    print(io, phase.Δt)
+    print(io, ", ")
+    print(io, phase.Δtsample)
     print(io, ")")
 end
+
+FluxTraining.phasedataiter(phase::RateEncoded) =
+    FluxTraining.phasedataiter(phase.phase)
 
 function FluxTraining.step!(learner, phase::RateEncoded, batch)
     for _ in 0:Δt:phase.Δtsample
@@ -31,23 +36,45 @@ struct RMHebbTraining{T<:RMHebb} <: AbstractTrainingPhase
     rmhebb::T
 end
 
-Base.show(io::IO, ::RMHebbTraining) = print(io, "RMHebbTraining")
+Base.show(io::IO, ::RMHebbTraining) = print(io, "RMHebbTraining(...)")
 
 function FluxTraining.step!(learner, phase::RMHebbTraining, sample)
     x, y = sample
     FluxTraining.runstep(learner, phase, (xs = x, ys = y)) do handle, state
         state.grads = initialize_grads(learner.params)
         handle(FluxTraining.LossBegin())
-        state.ŷs = learner.model(state.xs)
-        state.loss = learner.lossfn(state.ŷs, state.ys)
+        learner.model(state.xs)
         handle(FluxTraining.BackwardBegin())
         dWout = phase.rmhebb(learner.model.state, state.ys)
         state.grads[learner.model.cell.Wout] .+= dWout
+        state.ŷs = phase.rmhebb.zlpf.f̄
+        state.loss = learner.lossfn(state.ŷs, state.ys)
         handle(FluxTraining.BackwardEnd())
         Flux.Optimise.update!(learner.optimizer, learner.model.cell.Wout, dWout)
     end
 end
 
+struct RMHebbValidation{T<:LowPassFilter} <: AbstractValidationPhase
+    lpf::T
+end
+
+function RMHebbValidation(rmhebb::RMHebb)
+    lpf = LowPassFilter(rmhebb.zlpf.τ, rmhebb.zlpf.Δt, similar(rmhebb.zlpf.f̄))
+    lpf.f̄ .= zero(lpf.f̄)
+
+    RMHebbValidation(lpf)
+end
+
+Base.show(io::IO, ::RMHebbValidation) = print(io, "RMHebbValidation(...)")
+
+function FluxTraining.step!(learner, phase::RMHebbValidation, sample)
+    x, y = sample
+    FluxTraining.runstep(learner, phase, (xs = x, ys = y)) do handle, state
+        ŷs = learner.model(state.xs)
+        state.ŷs = phase.lpf(ŷs)
+        state.loss = learner.lossfn(state.ŷs, state.ys)
+    end
+end
 
 # function run!(step!::F, data, args...;
 #               nepochs = 1, bs = 1, shuffle = true, progress = nothing) where F

@@ -18,7 +18,7 @@ using DataStructures
 using Flux
 using Flux: Zygote, @functor, Recur
 using FluxTraining
-using FluxTraining: AbstractTrainingPhase
+using FluxTraining: Phase, AbstractTrainingPhase, AbstractValidationPhase
 using LinearAlgebra
 using MLUtils, MLDatasets
 using NNlib
