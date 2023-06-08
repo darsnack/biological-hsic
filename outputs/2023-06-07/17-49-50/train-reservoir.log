@@ -1,0 +1,4 @@
+[2023-06-07 17:51:21,559][absl][INFO] - Saving item to /home/daruwal/repos/biological-hsic/outputs/2023-06-07/17-49-50/checkpoints/0.orbax-checkpoint-tmp-1686174681457681/default.
+[2023-06-07 17:51:21,967][absl][INFO] - Renaming /home/daruwal/repos/biological-hsic/outputs/2023-06-07/17-49-50/checkpoints/0.orbax-checkpoint-tmp-1686174681457681/default.orbax-checkpoint-tmp-1686174681559883 to /home/daruwal/repos/biological-hsic/outputs/2023-06-07/17-49-50/checkpoints/0.orbax-checkpoint-tmp-1686174681457681/default
+[2023-06-07 17:51:21,967][absl][INFO] - Finished saving checkpoint to `/home/daruwal/repos/biological-hsic/outputs/2023-06-07/17-49-50/checkpoints/0.orbax-checkpoint-tmp-1686174681457681/default`.
+[2023-06-07 17:51:21,968][absl][INFO] - Renaming /home/daruwal/repos/biological-hsic/outputs/2023-06-07/17-49-50/checkpoints/0.orbax-checkpoint-tmp-1686174681457681 to /home/daruwal/repos/biological-hsic/outputs/2023-06-07/17-49-50/checkpoints/0

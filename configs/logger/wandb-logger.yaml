@@ -1,0 +1,5 @@
+_target_: projectlib.logging.WandbLogger.init
+entity: "pharm"
+project: "biological-hsic"
+group: "${hydra:job.name}"
+name: "${now:%Y-%m-%dT%H-%M-%S}"

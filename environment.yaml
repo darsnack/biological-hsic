@@ -1,0 +1,22 @@
+name: biological-hsic
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - cudatoolkit=11.8.0
+  - ipykernel
+  - matplotlib
+  - seaborn
+  - pip:
+      - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+      - "tensorflow==2.12.*"
+      - tensorflow_datasets
+      - "jax[cuda11_pip]==0.4.7"
+      - clu
+      - flax
+      - optax
+      - orbax-checkpoint
+      - hydra-core
+      - wandb
