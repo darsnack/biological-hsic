@@ -1,3 +1,5 @@
 hydra:
   job:
     chdir: true
+
+gpu: 0

@@ -22,7 +22,7 @@ from orbax.checkpoint import (CheckpointManager,
 
 from projectlib.utils import setup_rngs, instantiate_schedule
 from projectlib.data import build_dataloader
-from projectlib.models.reservoir import Reservoir
+from projectlib.models.reservoir import ReservoirCell
 from projectlib.hsic import kernel_matrix, global_error
 from projectlib.training import (TrainState,
                                  Metrics,
@@ -33,6 +33,9 @@ from projectlib.training import (TrainState,
 
 @hydra.main(config_path="./configs", config_name="train-reservoir", version_base=None)
 def main(cfg: DictConfig):
+    # use specific gpu
+    jax.config.update("jax_default_device", jax.devices()[cfg.gpu])
+
     # setup rngs
     rngs = setup_rngs(cfg.seed, keys=["model", "train", "data"])
 
@@ -46,12 +49,12 @@ def main(cfg: DictConfig):
                               window_shift=1)
 
     # setup model
-    model = Reservoir(cfg.model.nhidden, cfg.data.zdim,
-                      time_constant=cfg.model.time_constant,
-                      time_step=cfg.training.time_step,
-                      recurrent_strength=cfg.model.recurrent_strength,
-                      hidden_noise=cfg.model.hidden_noise,
-                      output_noise=cfg.model.output_noise)
+    model = ReservoirCell(cfg.model.nhidden, cfg.data.zdim,
+                          time_constant=cfg.model.time_constant,
+                          time_step=cfg.training.time_step,
+                          recurrent_strength=cfg.model.recurrent_strength,
+                          hidden_noise=cfg.model.hidden_noise,
+                          output_noise=cfg.model.output_noise)
 
     # initialize randomness
     tf.random.set_seed(cfg.seed) # deterministic data iteration
@@ -63,11 +66,12 @@ def main(cfg: DictConfig):
     schedule = instantiate_schedule(cfg.schedule, len(loader))
     opt = optax.sgd(learning_rate=schedule)
     # create training state (initialize parameters)
-    dummy_input = jnp.ones((1, cfg.data.ntimesteps,
-                            cfg.data.xdim + cfg.data.ydim + cfg.data.zdim))
-    state_init = Reservoir.initialize_carry(state_key,
-                                            batch_dims=(1,),
-                                            size=cfg.model.nhidden)
+    state_init = ReservoirCell.initialize_carry(state_key,
+                                                batch_dims=(1,),
+                                                size=cfg.model.nhidden)
+    dummy_input = (jnp.ones(state_init.shape),
+                   jnp.ones((1, cfg.data.ntimesteps,
+                             cfg.data.xdim + cfg.data.ydim + cfg.data.zdim)))
     _Metrics = Metrics.with_aux(
         target=TraceMetric.from_output("target", (1, cfg.data.zdim)),
         output=TraceMetric.from_output("output", (1, cfg.data.zdim))
@@ -177,7 +181,7 @@ def main(cfg: DictConfig):
 
     # save final state
     ckpt = {"train_state": final_state, "metrics_history": trace}
-    ckpt_mgr.save(cfg.training.nepochs + 1, ckpt, force=True)
+    ckpt_mgr.save(cfg.training.nepochs, ckpt, force=True)
 
     # plot metrics traces
     # fig, _ = plot_metrics_history(trace["train"], figsize=(10, 5))
@@ -190,8 +194,6 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
     # prevent TF from using the GPU
     tf.config.experimental.set_visible_devices([], "GPU")
-    # use GPU 1 of lambda machine
-    jax.config.update("jax_default_device", jax.devices()[1])
     # set seaborn config
     sns.set_theme(context="notebook",
                   font_scale=1.125,

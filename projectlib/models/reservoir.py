@@ -133,9 +133,6 @@ class Reservoir(nn.Module):
     def initialize_carry(rng, batch_dims, size):
         return ReservoirCell.initialize_carry(rng, batch_dims, size)
 
-    def step(self, carry, inputs):
-        return self.cell(carry, inputs)
-
     def __call__(self, inputs):
         *batch_size, _, _ = inputs.shape
 

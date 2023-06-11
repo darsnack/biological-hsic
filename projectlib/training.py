@@ -79,15 +79,19 @@ class TrainState(train_state.TrainState):
 
     @classmethod
     def from_model(cls, model, dummy_input, opt, rngs,
-                   param_init = None, model_state = None, metrics = None):
-        _init = model.init if param_init is None else param_init
+                   param_init = None,
+                   model_state = None,
+                   metrics = None,
+                   apply_fn = None):
+        _init = maybe(param_init, model.init)
         if isinstance(dummy_input, tuple):
             params = _init(rngs, *dummy_input)
         else:
             params = _init(rngs, dummy_input)
         metrics = Metrics.empty() if metrics is None else metrics
+        apply_fn = maybe(apply_fn, model.apply)
 
-        return cls.create(apply_fn=model.apply,
+        return cls.create(apply_fn=apply_fn,
                           params=params,
                           model_state=model_state,
                           tx=opt,
@@ -214,7 +218,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
     rng = maybe(rng, jrng.PRNGKey(0))
 
     epoch_len = len(data["train"])
-    for epoch in jnp.arange(nepochs):
+    for epoch in range(nepochs):
         # run epoch
         for i, batch in enumerate(data["train"].as_numpy_iterator()):
             batch = batch_values(batch)

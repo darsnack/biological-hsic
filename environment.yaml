@@ -13,10 +13,10 @@ dependencies:
       - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
       - "tensorflow==2.12.*"
       - tensorflow_datasets
-      - "jax[cuda11_pip]==0.4.7"
+      - "jax[cuda11_pip]==0.4.10"
       - clu
       - flax
       - optax
-      - orbax-checkpoint
+      - "orbax-checkpoint==0.2.2"
       - hydra-core
       - wandb
