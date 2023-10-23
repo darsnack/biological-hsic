@@ -1,0 +1,3 @@
+dataset: mnist
+batchsize: 6
+shape: [28, 28, 1]

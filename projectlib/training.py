@@ -2,17 +2,19 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrng
 import jax.tree_util as jtu
+import wandb
 from clu import metrics
 from flax import struct
 from flax.training import train_state
 from flax.traverse_util import path_aware_map
 from flax.core.frozen_dict import freeze
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 from dataclasses import dataclass
+from functools import partial
 
-from projectlib.utils import maybe
+from projectlib.utils import maybe, flatten
 from projectlib.logging import PrintLogger
-from projectlib.hsic import kernel_matrix, global_error
+from projectlib.hsic import kernel_matrix, global_error, hsic_bottleneck
 
 Array = Any
 
@@ -89,7 +91,7 @@ class TrainState(train_state.TrainState):
         else:
             params = _init(rngs, dummy_input)
         metrics = Metrics.empty() if metrics is None else metrics
-        apply_fn = maybe(apply_fn, model.apply)
+        apply_fn = model.apply if apply_fn is None else apply_fn
 
         return cls.create(apply_fn=apply_fn,
                           params=params,
@@ -98,9 +100,15 @@ class TrainState(train_state.TrainState):
                           rngs=rngs,
                           metrics=metrics)
 
+    def split_rngs(self):
+        rngs = {k: jrng.split(v, 1)[0] for k, v in self.rngs.items()}
+
+        return self.replace(rngs=rngs)
+
     def reset(self, tx = None):
         _tx = self.tx if tx is None else tx
         opt_state = _tx.init(self.params)
+
         return self.replace(step=0, tx=_tx, opt_state=opt_state)
 
 @dataclass
@@ -115,7 +123,7 @@ class LowPassFilter:
 
 def create_rmhebb_step(ntimesteps, gamma, sigmas, gain, lpf: LowPassFilter):
     @jax.jit
-    def rmhebb_step(state: TrainState, batch, rng = None):
+    def rmhebb_step(state: TrainState, batch, _ = None):
         # compute global error signal
         xs, ys, zs = batch
         sigmax, sigmay, sigmaz = sigmas
@@ -125,50 +133,161 @@ def create_rmhebb_step(ntimesteps, gamma, sigmas, gain, lpf: LowPassFilter):
         xi = gain * global_error(kx, ky, kz, zs, gamma, sigmaz)
         xi = jnp.expand_dims(xi, axis=0)
         # compute input signal
-        inputs = jnp.concatenate([xs[0], ys[0], zs[0]], axis=-1)
+        inputs = jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=-1)
         inputs = jnp.expand_dims(inputs, axis=0)
 
         # define each time step
         def step(_, carry):
-            train_state, lpf_state = carry
+            losses, train_state, lpf_state = carry
             # run reservoir forward
+            train_state = train_state.split_rngs()
             (model_state, outputs), aux = train_state.apply_fn(
                 train_state.params, train_state.model_state, inputs,
                 rngs=train_state.rngs,
-                method="step",
                 mutable="intermediates"
             )
-            rs = aux["intermediates"]["cell"]["rstore"][0]
+            rs = aux["intermediates"]["rstore"][0]
             train_state = train_state.replace(model_state=model_state)
             # update LPF value
             lpf_errors, lpf_outputs = lpf_state
-            mse = -jnp.sum((outputs - xi) ** 2)
-            lpf_errors = lpf(lpf_errors, mse)
+            errors = -jnp.sum((outputs - xi) ** 2)
+            lpf_errors = lpf(lpf_errors, errors)
             lpf_outputs = lpf(lpf_outputs, outputs)
             # compute and apply update
-            reward = jax.lax.convert_element_type(mse > lpf_errors, jnp.int_)
-            dW = -reward * (outputs - lpf_outputs) * jnp.transpose(rs)
-            dWkey = ("params", "cell", "o", "kernel")
+            # reward = jax.lax.convert_element_type(errors > lpf_errors, jnp.int_)
+            reward = errors > lpf_errors
+            dW = reward * (lpf_outputs - outputs) * jnp.transpose(rs)
+            dWkey = ("params", "o", "kernel")
             grads = freeze(path_aware_map(
                 lambda k, v: dW if k == dWkey else jnp.zeros_like(v),
                 train_state.params
             ))
             train_state = train_state.apply_gradients(grads=grads)
+            # compute loss
+            losses += -errors / jnp.size(xi)
 
-            return train_state, (lpf_errors, lpf_outputs)
+            return losses, train_state, (lpf_errors, lpf_outputs)
 
         # run over batch for ntimesteps
+        losses = jnp.zeros_like(xi, shape=())
         lpf_errors = jnp.zeros_like(xi, shape=())
         lpf_outputs = jnp.zeros_like(xi)
-        init_carry = (state, (lpf_errors, lpf_outputs))
-        state, (loss, _) = jax.lax.fori_loop(0, ntimesteps, step, init_carry)
+        init_carry = (losses, state, (lpf_errors, lpf_outputs))
+        losses, state, _ = jax.lax.fori_loop(0, ntimesteps, step, init_carry)
+        # carry = init_carry
         # for i in range(ntimesteps):
         #     carry = step(i, carry)
-        # state, (loss, _) = carry
+        # losses, state, _ = carry
+
+        return losses / ntimesteps, state
+
+    return rmhebb_step
+
+def grad_norm(gs):
+    leaves = jtu.tree_leaves(gs)
+
+    return jnp.sqrt(sum(jnp.vdot(x, x) for x in leaves))
+
+def clip_grad_norm(gs, max_norm):
+    norm = grad_norm(gs)
+    normalize = lambda g: jnp.where(norm < max_norm, g, g * (max_norm / norm))
+
+    return jtu.tree_map(normalize, gs)
+
+def create_hsic_step(loss_fn, gamma, sigmas, flatten_input = False):
+    @jax.jit
+    def train_step(state: TrainState, batch, _ = None):
+        xs, ys = batch
+        # apply model forward and compute layerwise gradients along the way
+        updates = []
+        zs = flatten(xs) if flatten_input else xs
+        for apply_fn, params in zip(state.apply_fn[:-1], state.params[:-1]):
+            # compute hsic bottleneck
+            def compute_loss(params):
+                _zs = apply_fn(params, zs, rngs=state.rngs)
+                loss = hsic_bottleneck(xs, ys, _zs, gamma, *sigmas)[0]
+
+                return loss, _zs
+            grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
+            (_, zs), updates_last = grad_fn(params)
+            # updates.append(clip_grad_norm(updates_last, 2))
+            updates.append(updates_last)
+        # apply the final layer using BP
+        def compute_loss(params):
+            yhats = state.apply_fn[-1](params, zs, rngs=state.rngs)
+
+            return jnp.mean(loss_fn(yhats, ys))
+        grad_fn = jax.value_and_grad(compute_loss)
+        loss, out_grads = grad_fn(state.params[-1])
+        # out_grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), out_grads)
+
+        grad_norms = [jnp.mean(jnp.array([jnp.linalg.norm(jnp.reshape(g, -1))
+                                          for g in jtu.tree_leaves(gs)]))
+                      for gs in [*updates, out_grads]]
+        def log(zs, grad_norms):
+            wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+            wandb.log({f"gradnorm_{i}": grad_norm
+                      for i, grad_norm in enumerate(grad_norms)}, commit=False)
+        jax.debug.callback(log, zs, grad_norms, ordered=True)
+
+        # update model
+        out_grads = jtu.tree_map(lambda x: x * 1e-3, out_grads)
+        state = state.apply_gradients(grads=[*updates, out_grads])
 
         return loss, state
 
-    return rmhebb_step
+    return train_step
+
+def create_biohsic_step(loss_fn, gamma, sigmas, flatten_input = False):
+    @jax.jit
+    def train_step(state: TrainState, batch, _ = None):
+        xs, ys = batch
+        bs = ys.shape[0]
+        # compute input and output kernel matrices ahead of time
+        sigmax, sigmay, sigmaz = sigmas
+        kx = kernel_matrix(flatten(xs), sigmax)
+        ky = kernel_matrix(flatten(ys), sigmay)
+        # apply model forward and compute layerwise gradients along the way
+        zs = []
+        updates = []
+        zs_last = flatten(xs) if flatten_input else xs
+        for apply_fn, params in zip(state.apply_fn[:-1], state.params[:-1]):
+            # run forward step
+            apply_fn = partial(apply_fn, rngs=state.rngs)
+            zs_last, pullback = jax.vjp(apply_fn, params, zs_last)
+            # compute global error
+            kz = kernel_matrix(flatten(zs_last), sigmaz)
+            xi = global_error(kx, ky, kz, zs_last, gamma, sigmaz)
+            zs_shape = zs_last.shape[1:]
+            # compute gradient accounting for global error
+            zpertub = jnp.concatenate([jnp.zeros_like(zs_last, shape=(bs - 1, *zs_shape)),
+                                       xi * jnp.ones_like(zs_last, shape=(1, *zs_shape))],
+                                       axis=0)
+            updates_last = pullback(zpertub)[0]
+            zs.append(zs_last)
+            # updates.append(jtu.tree_map(lambda x: x * 1e-3, updates_last))
+            updates.append(updates_last)
+        # apply the final layer using BP
+        def compute_loss(params):
+            yhats = state.apply_fn[-1](params, zs_last, rngs=state.rngs)
+
+            return jnp.mean(loss_fn(yhats, ys))
+        grad_fn = jax.value_and_grad(compute_loss)
+        loss, out_grads = grad_fn(state.params[-1])
+
+        # grad_norms = [unfreeze(jtu.tree_map(lambda x: jnp.linalg.norm(jnp.reshape(x, -1)), g))
+        #               for g in state.params]
+        # # grad_norms.append(unfreeze(jtu.tree_map(lambda x: jnp.linalg.norm(jnp.reshape(x, -1)),
+        # #                                out_grads)))
+        # print(grad_norms)
+        # # wandb.log({"grads": wandb.Histogram(grad_norms[0])}, commit=False)
+
+        # update model
+        state = state.apply_gradients(grads=[*updates, out_grads])
+
+        return loss, state
+
+    return train_step
 
 def create_train_step(loss_fn, batch_stats = False):
     # if batch_stats are calculated, then we need to augment the apply_fn
@@ -223,6 +342,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         for i, batch in enumerate(data["train"].as_numpy_iterator()):
             batch = batch_values(batch)
             rng, rng_step, rng_metric = jrng.split(rng, 3)
+            state = state.split_rngs()
             loss, state = step_fn(state, batch, rng_step)
             state = metrics_fn(state, batch, rng_metric)
             if (step_log_interval is not None) and (i % step_log_interval == 0):
@@ -240,10 +360,11 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             for i, batch in enumerate(data["test"].as_numpy_iterator()):
                 batch = batch_values(batch)
                 rng, rng_metric = jrng.split(rng)
+                test_state = test_state.split_rngs()
                 test_state = metrics_fn(test_state, batch, rng_metric)
 
             # average metrics
-            for metric, value in state.metrics.compute().items():
+            for metric, value in test_state.metrics.compute().items():
                 metric_history["test"][metric].append(value)
 
         # run save function

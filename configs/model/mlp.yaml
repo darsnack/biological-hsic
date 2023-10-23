@@ -1,0 +1,3 @@
+_target_: projectlib.models.simple.MLP
+features: [128, 64]
+nclasses: 10

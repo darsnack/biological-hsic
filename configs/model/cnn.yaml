@@ -1,0 +1,4 @@
+_target_: projectlib.models.simple.CNN
+features: [16, 32]
+nclasses: 10
+pooling_factor: 2

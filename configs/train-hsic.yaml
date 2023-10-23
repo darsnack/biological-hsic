@@ -1,0 +1,20 @@
+defaults:
+- common
+- model: mlp
+- optimizer: adamw
+- _self_
+- optional data_model: ${data}_${model}
+- optional data_task/train-hsic: ${data}
+
+data: ???
+seed: 42
+checkpointing:
+  path: checkpoints
+  rate: 50 # in epochs
+hsic:
+  gamma: 2
+  sigmas: [1, 0.5, 2]
+training:
+  nepochs: 25
+  log_epochs: true
+  log_interval: 250 # in steps

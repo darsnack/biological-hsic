@@ -1,0 +1,3 @@
+dataset: cifar10
+batchsize: 6
+shape: [32, 32, 3]

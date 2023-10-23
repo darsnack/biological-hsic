@@ -6,7 +6,6 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 import jax
 import jax.numpy as jnp
 import jax.random as jrng
-import jax.tree_util as jtu
 import tensorflow as tf
 import optax
 import seaborn as sns
@@ -17,10 +16,9 @@ from math import sqrt
 from functools import partial
 from orbax.checkpoint import (CheckpointManager,
                               CheckpointManagerOptions,
-                              PyTreeCheckpointer,
-                              SaveArgs)
+                              PyTreeCheckpointer)
 
-from projectlib.utils import setup_rngs, instantiate_schedule
+from projectlib.utils import setup_rngs, instantiate_optimizer
 from projectlib.data import build_dataloader
 from projectlib.models.reservoir import ReservoirCell
 from projectlib.hsic import kernel_matrix, global_error
@@ -49,7 +47,7 @@ def main(cfg: DictConfig):
                               window_shift=1)
 
     # setup model
-    model = ReservoirCell(cfg.model.nhidden, cfg.data.zdim,
+    model = ReservoirCell(cfg.data.zdim,
                           time_constant=cfg.model.time_constant,
                           time_step=cfg.training.time_step,
                           recurrent_strength=cfg.model.recurrent_strength,
@@ -63,8 +61,7 @@ def main(cfg: DictConfig):
                  "reservoir": reservoir_key}
 
     # create optimizer
-    schedule = instantiate_schedule(cfg.schedule, len(loader))
-    opt = optax.sgd(learning_rate=schedule)
+    opt = instantiate_optimizer(cfg.schedule, len(loader) * cfg.data.ntimesteps)
     # create training state (initialize parameters)
     state_init = ReservoirCell.initialize_carry(state_key,
                                                 batch_dims=(1,),
@@ -83,65 +80,56 @@ def main(cfg: DictConfig):
     sigmas = tuple(0.25 * sqrt(d)
                    for d in (cfg.data.xdim, cfg.data.ydim, cfg.data.zdim))
     lpf = LowPassFilter(cfg.training.lpf_time_constant, cfg.training.time_step)
-    gain = 1
     train_step = create_rmhebb_step(ntimesteps=cfg.data.ntimesteps,
                                     gamma=cfg.hsic.gamma,
                                     sigmas=sigmas,
-                                    gain=gain,
+                                    gain=cfg.training.gain,
                                     lpf=lpf)
     # create evaluation step
     @jax.jit
-    def metric_step(state: TrainState, batch, rng):
+    def metric_step(state: TrainState, batch, _ = None):
         # compute global error signal
         xs, ys, zs = batch
         sigmax, sigmay, sigmaz = sigmas
         kx = kernel_matrix(xs, sigmax)
         ky = kernel_matrix(ys, sigmay)
         kz = kernel_matrix(zs, sigmaz)
-        xi = gain * global_error(kx, ky, kz, zs, cfg.hsic.gamma, sigmaz)
+        xi = cfg.training.gain * global_error(kx, ky, kz, zs, cfg.hsic.gamma, sigmaz)
         xi = jnp.expand_dims(xi, axis=0)
         # compute input signal
-        inputs = jnp.concatenate([xs[0], ys[0], zs[0]], axis=-1)
+        inputs = jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=-1)
         inputs = jnp.expand_dims(inputs, axis=0)
 
         # define each time step
         def step(_, carry):
-            train_state, mse, lpf_outputs = carry
+            mse, train_state, lpf_outputs = carry
             # run reservoir forward
+            train_state = train_state.split_rngs()
             model_state, outputs = train_state.apply_fn(
                 train_state.params, train_state.model_state, inputs,
-                rngs=train_state.rngs,
-                method="step"
+                rngs=train_state.rngs
             )
             train_state = train_state.replace(model_state=model_state)
             # compute mse
             lpf_outputs = lpf(lpf_outputs, outputs)
             mse = mse + jnp.mean((lpf_outputs - xi) ** 2)
 
-            return train_state, mse, lpf_outputs
+            return mse, train_state, lpf_outputs
 
         # run over batch for ntimesteps
-        init_carry = (state, jnp.zeros_like(xi, shape=()), jnp.zeros_like(xi))
-        state, loss, outputs = jax.lax.fori_loop(0,
+        init_carry = (jnp.zeros_like(xi, shape=()), state, jnp.zeros_like(xi))
+        loss, state, outputs = jax.lax.fori_loop(0,
                                                  cfg.data.ntimesteps,
                                                  step,
                                                  init_carry)
         loss = loss / cfg.data.ntimesteps
         metrics_updates = state.metrics.single_from_model_output(
-            loss = loss, target = xi, output = outputs, accuracy = 0
+            loss = loss, target = xi[0, 0], output = outputs[0, 0], accuracy = 0
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)
 
         return state
-
-    # def metric_step(state: TrainState, batch, rng):
-    #     print("hello")
-    #     state, metrics_updates = metric_step_jit(state, batch, rng)
-    #     # metrics = state.metrics.merge(metrics_updates)
-    #     # state = state.replace(metrics=metrics)
-
-    #     return state
 
     # create checkpointing utility
     ckpt_opts = CheckpointManagerOptions(
@@ -153,15 +141,6 @@ def main(cfg: DictConfig):
                                               cfg.checkpointing.path]),
                                  PyTreeCheckpointer(),
                                  ckpt_opts)
-    # save_kwargs = {
-    #     "save_args": {
-    #         "train_state": jtu.tree_map(lambda _: SaveArgs(aggregate=True),
-    #                                     train_state),
-    #         "metrics_history": jtu.tree_map(lambda _: SaveArgs(aggregate=True),
-    #                                         train_state.metrics.init_history())
-    #     }
-    # }
-    # save_fn = partial(ckpt_mgr.save, save_kwargs=save_kwargs)
 
     # create logger
     logger = hydra.utils.instantiate(cfg.logger)
@@ -182,14 +161,6 @@ def main(cfg: DictConfig):
     # save final state
     ckpt = {"train_state": final_state, "metrics_history": trace}
     ckpt_mgr.save(cfg.training.nepochs, ckpt, force=True)
-
-    # plot metrics traces
-    # fig, _ = plot_metrics_history(trace["train"], figsize=(10, 5))
-    # fig.set(title = "Training Curves")
-    # fig.savefig("metrics-train.pdf")
-    # fig, _ = plot_metrics_history(trace["test"], figsize=(10, 5))
-    # fig.set(title = "Test Curves")
-    # fig.savefig("metrics-test.pdf")
 
 if __name__ == "__main__":
     # prevent TF from using the GPU

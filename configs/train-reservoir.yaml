@@ -1,7 +1,7 @@
 defaults:
 - common
-- schedule: expdecay
-- logger: print-logger
+- optimizer: sgd
+- optimizer/learning_rate: expdecay
 - _self_
 
 data:
@@ -23,14 +23,16 @@ model:
   output_noise: 1e-2
 hsic:
   gamma: 2
-schedule:
-  init_value: 1e-4
-  decay_rate: 0.8
-  transition_steps: 10
-  staircase: true
+optimizer:
+  learning_rate:
+    init_value: 1e-4
+    decay_rate: 0.8
+    transition_steps: 10
+    staircase: true
 training:
   time_step: 1e-3
   lpf_time_constant: 5e-3
+  gain: 1
   nepochs: 100
   log_epochs: true
-  log_interval: 250 # in steps
+  log_interval: 20 # in steps

@@ -32,6 +32,9 @@ class PrintLogger:
         print("CONFIG:")
         print(OmegaConf.to_yaml(config))
 
+    def finish(self):
+        print("RUN COMPLETE")
+
 @dataclass
 class WandbLogger:
     internal_logger: Run
@@ -48,3 +51,6 @@ class WandbLogger:
 
     def log_config(self, config: DictConfig):
         self.internal_logger.config.update(OmegaConf.to_container(config))
+
+    def finish(self):
+        return wandb.finish()

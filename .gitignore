@@ -1,5 +1,6 @@
 # Project specific
 outputs/
+multirun/
 elzar-logs/
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks

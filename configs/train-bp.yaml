@@ -1,0 +1,17 @@
+defaults:
+- common
+- model: mlp
+- optimizer: adamw
+- _self_
+- optional data_model: ${data}_${model}
+- optional data_task/train-bp: ${data}
+
+data: ???
+seed: 42
+checkpointing:
+  path: checkpoints
+  rate: 50 # in epochs
+training:
+  nepochs: 25
+  log_epochs: true
+  log_interval: 250 # in steps

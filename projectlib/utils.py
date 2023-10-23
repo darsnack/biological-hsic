@@ -12,11 +12,29 @@ def maybe(this, that):
 def flatten(x):
     return jnp.reshape(x, (x.shape[0], -1))
 
+def grow_dims(x, before, after):
+    before_dims = tuple(i for i in range(before))
+    after_dims = tuple(i for i in range(x.ndim + before, x.ndim + before + after))
+
+    return jnp.expand_dims(x, (*before_dims, *after_dims))
+
+def grow_to(x, to):
+    return grow_dims(x, before=0, after=to - x.ndim)
+
 def setup_rngs(seed, keys = ["model", "train"]):
     root_rng = jrng.PRNGKey(seed) if not isinstance(seed, jax.Array) else seed
     rngs = {k: rng for k, rng in zip(keys, jrng.split(root_rng, len(keys)))}
 
     return {"root": root_rng, **rngs}
+
+def value_and_vgrad(f):
+    def _value_and_vgrad(*args, **kwargs):
+        out, pullback = jax.vjp(f, *args, **kwargs)
+        grad = pullback(jnp.ones(out.shape))[0]
+
+        return out, grad
+
+    return _value_and_vgrad
 
 def ckpt_save_kwargs(ckpt, **kwargs):
     return {

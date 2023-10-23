@@ -1,0 +1,6 @@
+# @package _global_
+
+optimizer:
+  learning_rate: 5e-4
+training:
+  nepochs: 50

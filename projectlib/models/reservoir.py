@@ -9,6 +9,7 @@ PRNGKey = Any
 Shape = Tuple[int, ...]
 Dtype = Any  # this could be a real type?
 Array = jax.Array
+InitFn = Callable[[PRNGKey, Shape, Dtype], Array]
 
 def reservoir_uniform_init():
     init_fn = nn.initializers.uniform(2.)
@@ -30,15 +31,9 @@ def reservoir_sparse_init(sparsity):
 
 class ReservoirCell(nn.RNNCellBase):
     output_size: int
-    kernel_init: Callable[[PRNGKey, Shape, Dtype], Array] = (
-        reservoir_uniform_init()    
-    )
-    recurrent_kernel_init: Callable[[PRNGKey, Shape, Dtype], Array] = (
-        reservoir_sparse_init(0.1)
-    )
-    readout_kernel_init: Callable[[PRNGKey, Shape, Dtype], Array] = (
-        nn.initializers.zeros_init()
-    )
+    kernel_init: InitFn = reservoir_uniform_init()
+    recurrent_kernel_init: InitFn = reservoir_sparse_init(0.1)
+    readout_kernel_init: InitFn = nn.initializers.zeros_init()
     time_constant: float = 10e-3
     time_step: float = 1e-3
     recurrent_strength: float = 1.2
@@ -102,7 +97,7 @@ class ReservoirCell(nn.RNNCellBase):
         du = self.recurrent_strength * dense_r(r) + dense_i(x) + dense_f(z)
         u = self.time_step * (du - u) / self.time_constant
 
-        return u, z
+        return u, xi_output
 
 
     @staticmethod
