@@ -15,6 +15,7 @@ from functools import partial
 from projectlib.utils import maybe, flatten
 from projectlib.logging import PrintLogger
 from projectlib.hsic import kernel_matrix, global_error, hsic_bottleneck
+from projectlib.models.layerwise import lvalue_and_grad
 
 Array = Any
 
@@ -66,6 +67,17 @@ class Metrics(metrics.Collection):
             "_InlineMetrics",
             (Metrics,),
             {"__annotations__": {**cls.__annotations__, **metrics}})
+        )
+
+    @classmethod
+    def with_hsic(cls, nlayers):
+        return Metrics.with_aux(
+            **{f"hsic_layer{i}": metrics.Average.from_output(f"hsic{i}")
+               for i in range(nlayers)},
+            **{f"hsicx_layer{i}": metrics.Average.from_output(f"hsicx{i}")
+               for i in range(nlayers)},
+            **{f"hsicy_layer{i}": metrics.Average.from_output(f"hsicy{i}")
+               for i in range(nlayers)}
         )
 
     def init_history(self):
@@ -194,47 +206,38 @@ def clip_grad_norm(gs, max_norm):
 
     return jtu.tree_map(normalize, gs)
 
-def create_hsic_step(loss_fn, gamma, sigmas, flatten_input = False):
+def create_hsic_step(loss_fn, gamma, sigmas):
     @jax.jit
     def train_step(state: TrainState, batch, _ = None):
         xs, ys = batch
         # apply model forward and compute layerwise gradients along the way
-        updates = []
-        zs = flatten(xs) if flatten_input else xs
-        for apply_fn, params in zip(state.apply_fn[:-1], state.params[:-1]):
-            # compute hsic bottleneck
-            def compute_loss(params):
-                _zs = apply_fn(params, zs, rngs=state.rngs)
-                loss = hsic_bottleneck(xs, ys, _zs, gamma, *sigmas)[0]
-
-                return loss, _zs
-            grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-            (_, zs), updates_last = grad_fn(params)
-            # updates.append(clip_grad_norm(updates_last, 2))
-            updates.append(updates_last)
-        # apply the final layer using BP
         def compute_loss(params):
-            yhats = state.apply_fn[-1](params, zs, rngs=state.rngs)
+            _, acts = state.apply_fn(params, xs, rngs=state.rngs)
+            hsic_losses = {
+                k: hsic_bottleneck(xs, ys, zs, gamma, *sigmas)[0] if i < len(acts) - 1
+                   else jnp.mean(loss_fn(zs, ys))
+                for i, (k, zs) in enumerate(acts.items())
+            }
 
-            return jnp.mean(loss_fn(yhats, ys))
-        grad_fn = jax.value_and_grad(compute_loss)
-        loss, out_grads = grad_fn(state.params[-1])
+            return hsic_losses
+        losses, grads = lvalue_and_grad(compute_loss)(state.params)
         # out_grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), out_grads)
 
-        grad_norms = [jnp.mean(jnp.array([jnp.linalg.norm(jnp.reshape(g, -1))
-                                          for g in jtu.tree_leaves(gs)]))
-                      for gs in [*updates, out_grads]]
-        def log(zs, grad_norms):
-            wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
-            wandb.log({f"gradnorm_{i}": grad_norm
-                      for i, grad_norm in enumerate(grad_norms)}, commit=False)
-        jax.debug.callback(log, zs, grad_norms, ordered=True)
+        grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
+                       for g in jtu.tree_leaves(gs)]
+                      for gs in grads["params"].values()]
+        def log(grad_norms):
+            # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+            wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
+                                         for j, grad_norm_j in enumerate(grad_norm)}
+                       for i, grad_norm in enumerate(grad_norms)}, commit=False)
+        jax.debug.callback(log, grad_norms, ordered=True)
 
         # update model
-        out_grads = jtu.tree_map(lambda x: x * 1e-3, out_grads)
-        state = state.apply_gradients(grads=[*updates, out_grads])
+        grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), grads)
+        state = state.apply_gradients(grads=grads)
 
-        return loss, state
+        return losses[-1], state
 
     return train_step
 

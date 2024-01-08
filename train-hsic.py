@@ -44,50 +44,33 @@ def main(cfg: DictConfig):
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
-    chain = Chain.from_model(model)
     init_keys = {"params": rngs["model"]}
 
     # create optimizer
     opt = instantiate_optimizer(cfg.optimizer, len(train_loader))
     # create training state (initialize parameters)
     dummy_input = jnp.ones((1, *cfg.data.shape))
-    _Metrics = Metrics.with_aux(
-        **{maybe(layer.name, f"hsic_layer{i}"): metrics.Average.from_output(f"hsic{i}")
-           for i, layer in enumerate(chain.models)},
-        **{maybe(layer.name, f"hsicx_layer{i}"): metrics.Average.from_output(f"hsicx{i}")
-           for i, layer in enumerate(chain.models)},
-        **{maybe(layer.name, f"hsicy_layer{i}"): metrics.Average.from_output(f"hsicy{i}")
-           for i, layer in enumerate(chain.models)}
-    )
-    train_state = TrainState.from_model(chain, dummy_input, opt, init_keys,
-                                        apply_fn=chain.get_apply_fns(),
-                                        metrics=_Metrics.empty())
+    train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
+                                        apply_fn=model.lapply)
+    CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
+    train_state = train_state.replace(metrics=CustomMetrics.empty())
     # create training step
     loss_fn = optax.softmax_cross_entropy
-    train_step = create_hsic_step(loss_fn, cfg.hsic.gamma, cfg.hsic.sigmas,
-                                  flatten_input=chain.flatten)
+    train_step = create_hsic_step(loss_fn, cfg.hsic.gamma, cfg.hsic.sigmas)
     @jax.jit
     def metric_step(state: TrainState, batch, _ = None):
         xs, ys = batch
-        # a single layer's forward pass
-        hsic_losses = []
-        hsicx_losses = []
-        hsicy_losses = []
-        zs = flatten(xs) if chain.flatten else xs
-        for apply_fn, params in zip(state.apply_fn, state.params):
-            zs = apply_fn(params, zs, rngs=state.rngs)
-            hsic_terms = hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *cfg.hsic.sigmas)
-            hsic_losses.append(hsic_terms[0])
-            hsicx_losses.append(hsic_terms[1])
-            hsicy_losses.append(hsic_terms[2])
+        ypreds, acts = state.apply_fn(state.params, xs, rngs=state.rngs)
+        hsic_losses = {k: hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *cfg.hsic.sigmas)
+                       for k, zs in acts.items()}
         # pass input through model storing local grads along the way
-        loss = jnp.mean(loss_fn(zs, ys))
-        acc = jnp.mean(jnp.argmax(zs, axis=-1) == jnp.argmax(ys, axis=-1))
+        loss = jnp.mean(loss_fn(ypreds, ys))
+        acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
             loss=loss, accuracy=acc,
-            **{f"hsic{i}": hsic_loss for i, hsic_loss in enumerate(hsic_losses)},
-            **{f"hsicx{i}": hsic_loss for i, hsic_loss in enumerate(hsicx_losses)},
-            **{f"hsicy{i}": hsic_loss for i, hsic_loss in enumerate(hsicy_losses)}
+            **{f"hsic{i}": hsic_loss[0] for i, hsic_loss in enumerate(hsic_losses.values())},
+            **{f"hsicx{i}": hsic_loss[1] for i, hsic_loss in enumerate(hsic_losses.values())},
+            **{f"hsicy{i}": hsic_loss[2] for i, hsic_loss in enumerate(hsic_losses.values())},
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)

@@ -11,13 +11,16 @@ import optax
 import seaborn as sns
 import hydra
 from omegaconf import DictConfig
+from clu import metrics
 from orbax.checkpoint import (CheckpointManager,
                               CheckpointManagerOptions,
                               PyTreeCheckpointer)
 
 from projectlib.utils import setup_rngs, instantiate_optimizer
 from projectlib.data import build_dataloader, default_data_transforms
-from projectlib.training import TrainState, create_train_step, fit
+from projectlib.training import TrainState, create_train_step, fit, Metrics
+
+from projectlib.hsic import hsic_bottleneck
 
 @hydra.main(config_path="./configs", config_name="train-bp", version_base=None)
 def main(cfg: DictConfig):
@@ -48,17 +51,24 @@ def main(cfg: DictConfig):
     # create training state (initialize parameters)
     dummy_input = jnp.ones((1, *cfg.data.shape))
     train_state = TrainState.from_model(model, dummy_input, opt, init_keys)
+    CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
+    train_state = train_state.replace(metrics=CustomMetrics.empty())
     # create training step
     loss_fn = optax.softmax_cross_entropy
     train_step = create_train_step(loss_fn)
     @jax.jit
     def metric_step(state: TrainState, batch, _ = None):
         xs, ys = batch
-        ypreds = state.apply_fn(state.params, xs, rngs=state.rngs)
+        ypreds, acts = model.lapply(state.params, xs, rngs=state.rngs)
+        hsic_losses = {k: hsic_bottleneck(xs, ys, zs, 2, 0.25, 0.1, 1)
+                       for k, zs in acts.items()}
         loss = jnp.mean(loss_fn(ypreds, ys))
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
-            loss = loss, accuracy = acc
+            loss = loss, accuracy = acc,
+            **{f"hsic{i}": hsic_loss[0] for i, hsic_loss in enumerate(hsic_losses.values())},
+            **{f"hsicx{i}": hsic_loss[1] for i, hsic_loss in enumerate(hsic_losses.values())},
+            **{f"hsicy{i}": hsic_loss[2] for i, hsic_loss in enumerate(hsic_losses.values())},
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)
