@@ -1,4 +1,4 @@
 # @package _global_
 
 model:
-  features: [1024, 512, 256, 128]
+  features: [5120, 3072, 1024, 512]

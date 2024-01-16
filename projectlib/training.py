@@ -221,7 +221,6 @@ def create_hsic_step(loss_fn, gamma, sigmas):
 
             return hsic_losses
         losses, grads = lvalue_and_grad(compute_loss)(state.params)
-        # out_grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), out_grads)
 
         grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
                        for g in jtu.tree_leaves(gs)]
@@ -234,7 +233,7 @@ def create_hsic_step(loss_fn, gamma, sigmas):
         jax.debug.callback(log, grad_norms, ordered=True)
 
         # update model
-        grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), grads)
+        # grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), grads)
         state = state.apply_gradients(grads=grads)
 
         return losses[-1], state

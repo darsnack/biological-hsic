@@ -17,7 +17,7 @@ from orbax.checkpoint import (CheckpointManager,
                               PyTreeCheckpointer)
 
 from projectlib.utils import setup_rngs, instantiate_optimizer
-from projectlib.data import build_dataloader, default_data_transforms
+from projectlib.data import load_dataset, build_dataloader, default_data_transforms
 from projectlib.training import TrainState, create_train_step, fit, Metrics
 
 from projectlib.hsic import hsic_bottleneck
@@ -33,7 +33,7 @@ def main(cfg: DictConfig):
     tf.random.set_seed(cfg.seed) # deterministic data iteration
 
     # setup dataloaders
-    data = tfds.load(cfg.data.dataset)
+    data = load_dataset(cfg.data.dataset)
     preprocess_fn = default_data_transforms(cfg.data.dataset)
     train_loader = build_dataloader(data["train"],
                                     batch_transform=preprocess_fn,

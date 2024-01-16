@@ -1,0 +1,3 @@
+dataset: xor
+batchsize: 6
+shape: [2]

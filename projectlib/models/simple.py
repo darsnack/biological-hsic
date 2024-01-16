@@ -19,8 +19,8 @@ class MLP(LayerwiseModule):
         for i, feature in enumerate(self.features):
             x = nn.Dense(features=feature, dtype=self.dtype)(x)
             x = nn.relu(x)
-            self.sow("layer_acts", f"dense_{i}", x)
             x = nn.LayerNorm(use_scale=False, use_bias=False)(x)
+            self.sow("layer_acts", f"dense_{i}", x)
         x = nn.Dense(features=self.nclasses)(x)
         self.sow("layer_acts", f"dense_{len(self.features)}", x)
 
@@ -39,10 +39,9 @@ class CNN(LayerwiseModule):
             x = nn.Conv(features=feature,
                         kernel_size=(3, 3),
                         padding=1,
-                        use_bias=False,
                         dtype=self.dtype)(x)
-            # x = nn.LayerNorm(dtype=self.dtype)(x)
             x = nn.relu(x)
+            x = nn.LayerNorm(use_scale=False, use_bias=False, dtype=self.dtype)(x)
             self.sow("layer_acts", f"conv_{i}", x)
             pool_size = (self.pooling_factor, self.pooling_factor)
             x = nn.avg_pool(x, window_shape=pool_size, strides=pool_size)
