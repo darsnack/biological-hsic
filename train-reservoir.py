@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrng
 import tensorflow as tf
-import optax
 import seaborn as sns
 import hydra
 from omegaconf import DictConfig

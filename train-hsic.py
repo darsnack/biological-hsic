@@ -6,20 +6,17 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 import jax
 import jax.numpy as jnp
 import tensorflow as tf
-import tensorflow_datasets as tfds
 import optax
 import seaborn as sns
 import hydra
 from omegaconf import DictConfig
-from clu import metrics
 from orbax.checkpoint import (CheckpointManager,
                               CheckpointManagerOptions,
                               PyTreeCheckpointer)
 
-from projectlib.utils import setup_rngs, instantiate_optimizer, flatten, maybe
+from projectlib.utils import setup_rngs, instantiate_optimizer
 from projectlib.data import load_dataset, build_dataloader, default_data_transforms
 from projectlib.hsic import hsic_bottleneck
-from projectlib.models.chain import Chain
 from projectlib.training import Metrics, TrainState, create_hsic_step, fit
 
 @hydra.main(config_path="./configs", config_name="train-hsic", version_base=None)
