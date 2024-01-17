@@ -240,7 +240,7 @@ def create_hsic_step(loss_fn, gamma, sigmas):
 
     return train_step
 
-def create_biohsic_step(loss_fn, gamma, sigmas, flatten_input = False):
+def create_biohsic_step(loss_fn, gamma, sigmas):
     @jax.jit
     def train_step(state: TrainState, batch, _ = None):
         xs, ys = batch
@@ -249,43 +249,46 @@ def create_biohsic_step(loss_fn, gamma, sigmas, flatten_input = False):
         sigmax, sigmay, sigmaz = sigmas
         kx = kernel_matrix(flatten(xs), sigmax)
         ky = kernel_matrix(flatten(ys), sigmay)
-        # apply model forward and compute layerwise gradients along the way
-        zs = []
-        updates = []
-        zs_last = flatten(xs) if flatten_input else xs
-        for apply_fn, params in zip(state.apply_fn[:-1], state.params[:-1]):
-            # run forward step
-            apply_fn = partial(apply_fn, rngs=state.rngs)
-            zs_last, pullback = jax.vjp(apply_fn, params, zs_last)
-            # compute global error
-            kz = kernel_matrix(flatten(zs_last), sigmaz)
-            xi = global_error(kx, ky, kz, zs_last, gamma, sigmaz)
-            zs_shape = zs_last.shape[1:]
-            # compute gradient accounting for global error
-            zpertub = jnp.concatenate([jnp.zeros_like(zs_last, shape=(bs - 1, *zs_shape)),
-                                       xi * jnp.ones_like(zs_last, shape=(1, *zs_shape))],
-                                       axis=0)
-            updates_last = pullback(zpertub)[0]
-            zs.append(zs_last)
-            # updates.append(jtu.tree_map(lambda x: x * 1e-3, updates_last))
-            updates.append(updates_last)
-        # apply the final layer using BP
-        def compute_loss(params):
-            yhats = state.apply_fn[-1](params, zs_last, rngs=state.rngs)
+        # apply model forward and compute layerwise vjp along the way
+        def _fwd(params):
+            _, acts = state.apply_fn(params, xs, rngs=state.rngs)
 
-            return jnp.mean(loss_fn(yhats, ys))
-        grad_fn = jax.value_and_grad(compute_loss)
-        loss, out_grads = grad_fn(state.params[-1])
+            return acts
+        zs, vjp_fun = jax.vjp(_fwd, state.params)
+        # pushback modulated perturbations through the vjp
+        def _build_dy(i, z):
+            kz = kernel_matrix(flatten(z), sigmaz)
+            xi = global_error(kx, ky, kz, z, gamma, sigmaz)
+            if i == len(zs) - 1:
+                dz = jax.grad(lambda _z: jnp.mean(loss_fn(_z, ys)))(z)
+            else:
+                dz = jnp.concatenate([jnp.zeros_like(z, shape=(bs - 1, *z.shape[1:])),
+                                      xi * jnp.ones_like(z, shape=(1, *z.shape[1:]))],
+                                     axis=0)
+            dy = jnp.stack([dz if j == i else jnp.zeros_like(z)
+                            for j in range(len(zs))], axis=0)
 
-        # grad_norms = [unfreeze(jtu.tree_map(lambda x: jnp.linalg.norm(jnp.reshape(x, -1)), g))
-        #               for g in state.params]
-        # # grad_norms.append(unfreeze(jtu.tree_map(lambda x: jnp.linalg.norm(jnp.reshape(x, -1)),
-        # #                                out_grads)))
-        # print(grad_norms)
-        # # wandb.log({"grads": wandb.Histogram(grad_norms[0])}, commit=False)
+            return dy
+        dys = {layer: _build_dy(i, zs[layer])
+               for i, layer in enumerate(zs.keys())}
+        grads = jax.vmap(vjp_fun)(dys)[0]
+        grads = {layer: jtu.tree_map(lambda p: p[i], grads["params"][layer])
+                 for i, layer in enumerate(grads["params"].keys())}
+        grads = {"params": grads}
+        loss = jnp.mean(loss_fn(list(zs.values())[-1], ys))
+
+        grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
+                       for g in jtu.tree_leaves(gs)]
+                      for gs in grads["params"].values()]
+        def log(grad_norms):
+            # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+            wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
+                                         for j, grad_norm_j in enumerate(grad_norm)}
+                       for i, grad_norm in enumerate(grad_norms)}, commit=False)
+        jax.debug.callback(log, grad_norms, ordered=True)
 
         # update model
-        state = state.apply_gradients(grads=[*updates, out_grads])
+        state = state.apply_gradients(grads=grads)
 
         return loss, state
 
