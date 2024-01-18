@@ -37,11 +37,13 @@ def global_error(kx, ky, kz, z, gamma, sigma):
     kx_bar = kx - jnp.mean(kx, axis=1)
     ky_bar = ky - jnp.mean(ky, axis=1)
     sigma = sigma * jnp.sqrt(jnp.prod(jnp.array(z.shape[1:])))
-    alpha = grow_to(-2 * kz[-1] / (sigma ** 2), z.ndim)
+    alpha = grow_to(2 * kz[-1] / (sigma ** 2), z.ndim)
     alpha = alpha * (z[-1] - z)
     N = alpha.shape[0] # samples in batch
-    alpha_bar = (-1 / N) * jnp.sum(alpha[:-1], axis=0)
+    alpha_bar = jnp.sum(alpha[:-1], axis=0) / N
     kxky = grow_to(kx_bar - gamma * ky_bar, alpha.ndim + 1)
+    xi = (jnp.trace(kxky[:-1, :-1] * alpha[-1] / N) +
+          kxky[-1, -1] * alpha_bar) / ((N - 1) ** 2)
     # xi = grow_to(kx_bar[-1, -1] - gamma * ky_bar[-1, -1], alpha.ndim) * alpha_bar
     # xi += jnp.sum((grow_to(kx_bar[-1, :-1] - gamma * ky_bar[-1, :-1], alpha.ndim) *
     #                (alpha[-1] + alpha_bar)), axis=0)
@@ -49,10 +51,10 @@ def global_error(kx, ky, kz, z, gamma, sigma):
     #                alpha[:-1] * (1 - 1 / N)), axis=0)
     # xi += jnp.sum((grow_to(kx_bar[:-1, :-1] - gamma * ky_bar[:-1, :-1], alpha.ndim + 1) *
     #                alpha[:-1] * (-1 / N)), axis=(0, 1))
-    xi = (jnp.sum(kxky[-1, :]) * alpha_bar -
-          jnp.sum(kxky[:-1, :] * jnp.expand_dims(alpha[:-1] / N, axis=1), axis=(0, 1)) +
-          jnp.sum(kxky[-1, :-1] * alpha[:-1], axis=0) +
-          jnp.sum(kxky[:-1, -1] * alpha[:-1], axis=0)) / ((N - 1) ** 2)
+    # xi = (jnp.sum(kxky[-1, :]) * alpha_bar -
+    #       jnp.sum(kxky[:-1, :] * jnp.expand_dims(alpha[:-1] / N, axis=1), axis=(0, 1)) +
+    #       jnp.sum(kxky[-1, :-1] * alpha[:-1], axis=0) +
+    #       jnp.sum(kxky[:-1, -1] * alpha[:-1], axis=0)) / ((N - 1) ** 2)
         #   jnp.sum(kxky[-1, :-1] * alpha[:-1], axis=0)) / ((N - 1) ** 2)
 
     return grow_dims(xi, before=1, after=0) # add batch dim back
