@@ -6,9 +6,9 @@ defaults:
 
 data:
   nsamples: 100
-  dim: 8
-  # ydim: 1
-  # zdim: 10
+  xdim: 50
+  ydim: 1
+  zdim: 10
   batchsize: 10
   ntimesteps: 20 # number of time steps per sample
 seed: 42
@@ -18,7 +18,7 @@ checkpointing:
 model:
   time_constant: 5e-3
   recurrent_strength: 1.2
-  nhidden: 1000
+  nhidden: 2000
   hidden_noise: 0
   # output_noise: 1e-1
   output_noise: 0

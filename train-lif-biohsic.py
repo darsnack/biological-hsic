@@ -5,6 +5,8 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 
 import jax
 import jax.numpy as jnp
+import jax.random as jrng
+import jax.tree_util as jtu
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import optax
@@ -18,9 +20,10 @@ from orbax.checkpoint import (CheckpointManager,
 from projectlib.utils import setup_rngs, instantiate_optimizer
 from projectlib.data import build_dataloader, load_dataset, default_data_transforms
 from projectlib.hsic import hsic_bottleneck
-from projectlib.training import Metrics, TrainState, create_biohsic_step, fit
+from projectlib.models.lif import LIFMLPCell
+from projectlib.training import Metrics, TrainState, create_lif_biohsic_step, fit
 
-@hydra.main(config_path="./configs", config_name="train-hsic", version_base=None)
+@hydra.main(config_path="./configs", config_name="train-lif-biohsic", version_base=None)
 def main(cfg: DictConfig):
     # use specific of machine
     jax.config.update("jax_default_device", jax.devices()[cfg.gpu])
@@ -39,29 +42,53 @@ def main(cfg: DictConfig):
                                     window_shift=1)
     test_loader = build_dataloader(data["test"],
                                    batch_transform=preprocess_fn,
-                                   batch_size=256)
+                                   batch_size=cfg.data.batchsize)
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
-    init_keys = {"params": rngs["model"]}
+    param_key, state_key = jrng.split(rngs["model"])
+    init_keys = {"params": param_key}
 
     # create optimizer
     # opt = optax.chain(instantiate_optimizer(cfg.optimizer, len(train_loader)),
     #                   optax.ema(0.999))
     opt = instantiate_optimizer(cfg.optimizer, len(train_loader))
     # create training state (initialize parameters)
-    dummy_input = jnp.ones((1, *cfg.data.shape))
+    state_init = LIFMLPCell.initialize_carry(state_key,
+                                             batch_dims=(cfg.data.batchsize,),
+                                             sizes=(*cfg.model.features,
+                                                    cfg.model.nclasses))
+    dummy_input = ([jnp.ones(u.shape) for u in state_init],
+                   jnp.ones((cfg.data.batchsize, *cfg.data.shape)))
     train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
+                                        model_state=state_init,
                                         apply_fn=model.lapply)
     CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
     train_state = train_state.replace(metrics=CustomMetrics.empty())
     # create training step
     loss_fn = optax.softmax_cross_entropy
-    train_step = create_biohsic_step(loss_fn, cfg.hsic.gamma, cfg.hsic.sigmas)
+    train_step = create_lif_biohsic_step(loss_fn,
+                                         cfg.hsic.gamma,
+                                         cfg.hsic.sigmas,
+                                         cfg.training.sample_timesteps)
     @jax.jit
     def metric_step(state: TrainState, batch, _ = None):
         xs, ys = batch
-        ypreds, acts = state.apply_fn(state.params, xs, rngs=state.rngs)
+        def step(carry, _):
+            model_state = carry
+            (model_state, ypreds), acts = state.apply_fn(state.params,
+                                                         model_state,
+                                                         xs,
+                                                         rngs=state.rngs)
+
+            return model_state, (ypreds, acts)
+
+        _, (ypreds, acts) = jax.lax.scan(step,
+                                         state.model_state,
+                                         jnp.arange(cfg.training.sample_timesteps))
+        ypreds = jtu.tree_map(lambda x: jnp.mean(x[(x.shape[0] // 2):], axis=0), ypreds)
+        acts = jtu.tree_map(lambda x: jnp.mean(x[(x.shape[0] // 2):], axis=0), acts)
+
         hsic_losses = {k: hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *cfg.hsic.sigmas)
                        for k, zs in acts.items()}
         # pass input through model storing local grads along the way

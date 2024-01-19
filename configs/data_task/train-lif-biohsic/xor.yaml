@@ -1,0 +1,11 @@
+# @package _global_
+
+optimizer:
+  learning_rate: 1e-5
+hsic:
+  gamma: 10
+  sigmas: [0.5, 0.5, 2]
+training:
+  nepochs: 25
+data:
+  batchsize: 20

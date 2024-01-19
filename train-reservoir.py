@@ -25,8 +25,7 @@ from projectlib.training import (TrainState,
                                  Metrics,
                                  TraceMetric,
                                  fit,
-                                 create_rmhebb_step,
-                                 LowPassFilter)
+                                 create_rmhebb_step)
 
 @hydra.main(config_path="./configs", config_name="train-reservoir", version_base=None)
 def main(cfg: DictConfig):
@@ -37,20 +36,20 @@ def main(cfg: DictConfig):
     rngs = setup_rngs(cfg.seed, keys=["model", "train", "data"])
 
     # setup dataloaders
-    # xdata_key, ydata_key, zdata_key = jrng.split(rngs["data"], 3)
-    xdata = jrng.uniform(rngs["data"], (cfg.data.nsamples, cfg.data.dim))
-    # ydata = jrng.uniform(ydata_key, (cfg.data.nsamples, cfg.data.ydim))
-    # zdata = jrng.uniform(zdata_key, (cfg.data.nsamples, cfg.data.zdim))
+    xdata_key, ydata_key, zdata_key = jrng.split(rngs["data"], 3)
+    xdata = jrng.uniform(xdata_key, (cfg.data.nsamples, cfg.data.xdim))
+    ydata = jrng.uniform(ydata_key, (cfg.data.nsamples, cfg.data.ydim))
+    zdata = jrng.uniform(zdata_key, (cfg.data.nsamples, cfg.data.zdim))
     # f = 2 * jnp.pi * jnp.arange(1, cfg.data.dim + 1)
     # t = jnp.arange(cfg.data.nsamples) / (2 * f[-1])
     # xdata = 0.5 * jnp.sin(jnp.expand_dims(f, axis=0) * jnp.expand_dims(t, axis=1))
-    loader = build_dataloader({"x": xdata},
+    loader = build_dataloader({"x": xdata, "y": ydata, "z": zdata},
                               batch_size=cfg.data.batchsize,
                             #   shuffle=False,
                               window_shift=1)
 
     # setup model
-    model = ReservoirCell(cfg.data.batchsize * cfg.data.dim,
+    model = ReservoirCell(cfg.data.zdim,
                           time_constant=cfg.model.time_constant,
                           time_step=cfg.training.time_step,
                           recurrent_strength=cfg.model.recurrent_strength,
@@ -69,31 +68,33 @@ def main(cfg: DictConfig):
     state_init = ReservoirCell.initialize_carry(state_key,
                                                 batch_dims=(1,),
                                                 size=cfg.model.nhidden)
-    lpf_state = (jnp.zeros(()), jnp.zeros((1, cfg.data.batchsize * cfg.data.dim)))
     dummy_input = (jnp.ones(state_init.shape),
-                   jnp.ones((1, cfg.data.ntimesteps, cfg.data.dim)))
+                   jnp.ones((1, cfg.data.ntimesteps,
+                             cfg.data.xdim + cfg.data.ydim + cfg.data.zdim)))
     _Metrics = Metrics.with_aux(
         target=TraceMetric.from_output("target",
-                                      (cfg.data.ntimesteps, cfg.data.batchsize * cfg.data.dim)),
+                                      (cfg.data.ntimesteps, cfg.data.zdim)),
         output=TraceMetric.from_output("output",
-                                      (cfg.data.ntimesteps, cfg.data.batchsize * cfg.data.dim))
+                                      (cfg.data.ntimesteps, cfg.data.zdim))
     )
     train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
                                         model_state=state_init,
-                                        aux_state=lpf_state,
                                         metrics=_Metrics.empty())
     # create training step
-    lpf = LowPassFilter(cfg.training.lpf_time_constant, cfg.training.time_step)
-    train_step = create_rmhebb_step(cfg.data.ntimesteps, lpf)
+    train_step = create_rmhebb_step(cfg.data.ntimesteps, cfg.hsic.gamma, cfg.hsic.sigma)
     # create evaluation step
     @jax.jit
     def metric_step(state: TrainState, batch, _ = None):
         # compute global error signal
-        xs = batch[0]
+        xs, ys, zs = batch
         # compute input signal
-        inputs = jnp.expand_dims(xs[-1], axis=0)
+        inputs = jnp.expand_dims(jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=0), axis=0)
         # compute target signal
-        targets = jnp.tile(jnp.reshape(xs, (1, -1)), (cfg.data.ntimesteps, 1, 1))
+        kx = kernel_matrix(xs, cfg.hsic.sigma)
+        ky = kernel_matrix(ys, cfg.hsic.sigma)
+        kz = kernel_matrix(zs, cfg.hsic.sigma)
+        targets = global_error(kx, ky, kz, zs, cfg.hsic.gamma, cfg.hsic.sigma)
+        targets = jnp.tile(targets, (cfg.data.ntimesteps, 1, 1))
 
         # define each time step
         def step(train_state, target):
@@ -105,9 +106,6 @@ def main(cfg: DictConfig):
             )
             train_state = train_state.replace(model_state=model_state)
             # compute mse
-            lpf_errors, lpf_outputs = train_state.aux_state
-            lpf_outputs = lpf(lpf_outputs, outputs)
-            train_state = train_state.replace(aux_state=(lpf_errors, lpf_outputs))
             mse = jnp.mean((outputs - target) ** 2)
 
             return train_state, (mse, outputs)

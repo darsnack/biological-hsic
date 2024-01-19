@@ -136,14 +136,18 @@ class LowPassFilter:
 
         return (1 - tau) * xavg + tau * x
 
-def create_rmhebb_step(ntimesteps, lpf: LowPassFilter):
+def create_rmhebb_step(ntimesteps, gamma, sigma):
     @jax.jit
     def rmhebb_step(state: TrainState, batch, _ = None):
-        xs = batch[0]
+        # compute global error signal
+        xs, ys, zs = batch
         # compute input signal
-        inputs = jnp.expand_dims(xs[-1], axis=0)
+        inputs = jnp.expand_dims(jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=0), axis=0)
         # compute target signal
-        targets = jnp.reshape(xs, (1, -1))
+        kx = kernel_matrix(xs, sigma)
+        ky = kernel_matrix(ys, sigma)
+        kz = kernel_matrix(zs, sigma)
+        targets = global_error(kx, ky, kz, zs, gamma, sigma)
 
         # define each time step
         def step(_, carry):
@@ -157,15 +161,7 @@ def create_rmhebb_step(ntimesteps, lpf: LowPassFilter):
             )
             rs = aux["intermediates"]["rstore"][0]
             train_state = train_state.replace(model_state=model_state)
-            # update LPF value
-            lpf_errors, lpf_outputs = train_state.aux_state
-            errors = -jnp.sum((outputs - targets) ** 2)
-            lpf_errors = lpf(lpf_errors, errors)
-            lpf_outputs = lpf(lpf_outputs, outputs)
-            train_state = train_state.replace(aux_state=(lpf_errors, lpf_outputs))
             # compute and apply update
-            # reward = jax.lax.convert_element_type(errors > lpf_errors, jnp.int_)
-            reward = errors > lpf_errors
             dW = (outputs - targets) * jnp.transpose(rs)
             # jax.debug.callback(print, reward, ordered=True)
             dWkey = ("params", "o", "kernel")
@@ -175,7 +171,7 @@ def create_rmhebb_step(ntimesteps, lpf: LowPassFilter):
             )
             train_state = train_state.apply_gradients(grads=grads)
             # compute loss
-            losses += -errors / jnp.size(targets)
+            losses += jnp.mean((outputs - targets) ** 2)
 
             return losses, train_state
 
@@ -288,6 +284,72 @@ def create_biohsic_step(loss_fn, gamma, sigmas):
 
         # update model
         state = state.apply_gradients(grads=grads)
+
+        return loss, state
+
+    return train_step
+
+def create_lif_biohsic_step(loss_fn, gamma, sigmas, ntimesteps):
+    @jax.jit
+    def train_step(state: TrainState, batch, _ = None):
+        xs, ys = batch
+        bs = ys.shape[0]
+        # compute input and output kernel matrices ahead of time
+        sigmax, sigmay, sigmaz = sigmas
+        kx = kernel_matrix(flatten(xs), sigmax)
+        ky = kernel_matrix(flatten(ys), sigmay)
+
+        def step(_, carry):
+            loss, state = carry
+            # apply model forward and compute layerwise vjp along the way
+            def _fwd(params):
+                (model_state, _), acts = state.apply_fn(params, state.model_state, xs,
+                                         rngs=state.rngs)
+
+                return acts, model_state
+            zs, vjp_fun, model_state = jax.vjp(_fwd, state.params, has_aux=True)
+            state = state.replace(model_state=model_state)
+            # pushback modulated perturbations through the vjp
+            def _build_dy(i, z):
+                kz = kernel_matrix(flatten(z), sigmaz)
+                xi = global_error(kx, ky, kz, z, gamma, sigmaz)
+                if i == len(zs) - 1:
+                    dz = jax.grad(lambda _z: jnp.mean(loss_fn(_z, ys)))(z)
+                else:
+                    dz = jnp.concatenate([jnp.zeros_like(z, shape=(bs - 1, *z.shape[1:])),
+                                          xi * jnp.ones_like(z, shape=(1, *z.shape[1:]))],
+                                         axis=0)
+                dy = jnp.stack([dz if j == i else jnp.zeros_like(z)
+                                for j in range(len(zs))], axis=0)
+
+                return dy
+            # print([z.shape for z in zs.values()])
+            dys = {layer: _build_dy(i, zs[layer])
+                for i, layer in enumerate(zs.keys())}
+            grads = jax.vmap(vjp_fun)(dys)[0]
+            grads = {layer: jtu.tree_map(lambda p: p[i], grads["params"][layer])
+                    for i, layer in enumerate(grads["params"].keys())}
+            grads = {"params": grads}
+            loss += jnp.mean(loss_fn(list(zs.values())[-1], ys))
+
+            def log(grad_norms):
+                # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+                wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
+                                            for j, grad_norm_j in enumerate(grad_norm)}
+                        for i, grad_norm in enumerate(grad_norms)}, commit=False)
+            grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
+                           for g in jtu.tree_leaves(gs)]
+                          for gs in grads["params"].values()]
+            jax.debug.callback(log, grad_norms, ordered=True)
+
+            # update model
+            state = state.apply_gradients(grads=grads)
+
+            return loss, state
+
+        loss = jnp.zeros(())
+        loss, state = jax.lax.fori_loop(0, ntimesteps, step, (loss, state))
+        loss = loss / ntimesteps
 
         return loss, state
 

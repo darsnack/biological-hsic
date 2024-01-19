@@ -84,17 +84,27 @@ def load_dataset(dataset):
         choice_key, noise_key = jrng.split(jrng.PRNGKey(42))
         xs = jrng.choice(choice_key,
                          jnp.array([[0, 0], [0, 1], [1, 0], [1, 1]]),
-                         (100000,))
+                         (1000,))
         ys = jnp.logical_xor(xs[:, 0], xs[:, 1]).astype(jnp.int32)
         xs_noisy = xs + jrng.normal(noise_key, xs.shape) * 0.01
 
-        return {"train": {"input": xs_noisy[:90000], "label": ys[:90000]},
-                "test": {"input": xs_noisy[90000:], "label": ys[90000:]}}
+        return {"train": {"input": xs_noisy[:900], "label": ys[:900]},
+                "test": {"input": xs_noisy[900:], "label": ys[900:]}}
+    elif dataset == "linear":
+        xs = jrng.uniform(jrng.PRNGKey(42), (1000, 2),
+                          minval=-1, maxval=1)
+        w = jrng.normal(jrng.PRNGKey(43), (2,))
+        ys = (xs @ w > 0).astype(jnp.int32)
+
+        return {"train": {"input": xs[:900], "label": ys[:900]},
+                "test": {"input": xs[900:], "label": ys[900:]}}
     else:
         return tfds.load(dataset)
 
 def default_data_transforms(dataset):
     if dataset == "xor":
+        return PreprocessFn([ToFloat(name="input"), OneHot(2)], only_jax_types=True)
+    elif dataset == "linear":
         return PreprocessFn([ToFloat(name="input"), OneHot(2)], only_jax_types=True)
     elif dataset == "mnist":
         return PreprocessFn([ToFloat(), Standardize((0.5,), (0.5,)), OneHot(10)],

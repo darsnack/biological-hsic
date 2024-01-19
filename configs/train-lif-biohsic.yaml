@@ -1,0 +1,27 @@
+defaults:
+- common
+- model: lif-mlp
+- optimizer: sgd
+- _self_
+- optional data_model: ${data}_${model}
+- optional data_task/train-lif-biohsic: ${data}
+
+data: ???
+seed: 42
+checkpointing:
+  path: checkpoints
+  rate: 50 # in epochs
+hsic:
+  gamma: 10
+  sigmas: [1, 0.5, 2]
+model:
+  time_constant: 5e-3
+  time_step: ${training.time_step}
+optimizer:
+  learning_rate: 1e-4
+training:
+  time_step: 1e-3
+  sample_timesteps: 30
+  nepochs: 25
+  log_epochs: true
+  log_interval: 250 # in steps

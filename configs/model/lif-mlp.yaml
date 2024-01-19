@@ -1,0 +1,5 @@
+_target_: projectlib.models.lif.LIFMLPCell
+features: [128, 64]
+nclasses: 10
+time_constant: 10e-3
+time_step: 1e-3
