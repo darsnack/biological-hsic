@@ -1,13 +1,14 @@
 defaults:
 - common
 - model: lif-mlp
-- optimizer: sgd
+- optimizer: adamw
 - _self_
 - optional data_model: ${data}_${model}
 - optional data_task/train-lif-biohsic: ${data}
 
 data: ???
 seed: 42
+nmodels: 10
 checkpointing:
   path: checkpoints
   rate: 50 # in epochs
@@ -21,7 +22,7 @@ optimizer:
   learning_rate: 1e-4
 training:
   time_step: 1e-3
-  sample_timesteps: 30
+  sample_timesteps: 20
   nepochs: 25
   log_epochs: true
   log_interval: 250 # in steps

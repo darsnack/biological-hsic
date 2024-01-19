@@ -6,6 +6,6 @@ hsic:
   gamma: 10
   sigmas: [0.3, 0.25, 2]
 training:
-  nepochs: 4
+  nepochs: 25
 data:
   batchsize: 64

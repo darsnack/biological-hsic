@@ -25,12 +25,13 @@ class LIFDenseCell(nn.RNNCellBase):
         dense_i = nn.Dense(features=self.features,
                            use_bias=True,
                            dtype=self.dtype,
-                           kernel_init=reservoir_uniform_init(),
+                        #    kernel_init=reservoir_uniform_init(),
                            param_dtype=self.param_dtype,
                            name="i")
 
         # update hidden neuron state
-        u = u + self.time_step * (dense_i(x) - u) / self.time_constant
+        u += self.time_step * (dense_i(x) - u) / self.time_constant
+        # u = dense_i(x)
 
         # compute hidden neuron firing rate
         r = u
@@ -60,7 +61,7 @@ class LIFMLPCell(LayerwiseModule):
                                 time_constant=self.time_constant,
                                 time_step=self.time_step)(us[i], x)
             _us.append(u)
-            x = nn.tanh(x)
+            x = nn.relu(x)
             x = nn.LayerNorm(use_scale=False, use_bias=False)(x)
             self.sow("layer_acts", f"dense_{i}", x)
         u, x = LIFDenseCell(features=self.nclasses,

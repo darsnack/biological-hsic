@@ -29,7 +29,11 @@ def main(cfg: DictConfig):
     jax.config.update("jax_default_device", jax.devices()[cfg.gpu])
 
     # setup rngs
-    rngs = setup_rngs(cfg.seed)
+    if cfg.nmodels > 1:
+        seeds = jrng.split(jrng.PRNGKey(cfg.seed), cfg.nmodels)
+        rngs = jax.vmap(setup_rngs)(seeds)
+    else:
+        rngs = setup_rngs(cfg.seed)
     # initialize randomness
     tf.random.set_seed(cfg.seed) # deterministic data iteration
 
@@ -46,7 +50,11 @@ def main(cfg: DictConfig):
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
-    param_key, state_key = jrng.split(rngs["model"])
+    if cfg.nmodels > 1:
+        splits = jax.vmap(jrng.split)(rngs["model"])
+        param_key, state_key = splits[:, 0, :], splits[:, 1, :]
+    else:
+        param_key, state_key = jrng.split(rngs["model"])
     init_keys = {"params": param_key}
 
     # create optimizer
@@ -54,17 +62,24 @@ def main(cfg: DictConfig):
     #                   optax.ema(0.999))
     opt = instantiate_optimizer(cfg.optimizer, len(train_loader))
     # create training state (initialize parameters)
-    state_init = LIFMLPCell.initialize_carry(state_key,
-                                             batch_dims=(cfg.data.batchsize,),
-                                             sizes=(*cfg.model.features,
-                                                    cfg.model.nclasses))
-    dummy_input = ([jnp.ones(u.shape) for u in state_init],
-                   jnp.ones((cfg.data.batchsize, *cfg.data.shape)))
-    train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
-                                        model_state=state_init,
-                                        apply_fn=model.lapply)
-    CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
-    train_state = train_state.replace(metrics=CustomMetrics.empty())
+    def init_state(state_keys, model_keys):
+        state_init = LIFMLPCell.initialize_carry(state_keys,
+                                                 batch_dims=(cfg.data.batchsize,),
+                                                 sizes=(*cfg.model.features,
+                                                        cfg.model.nclasses))
+        dummy_input = ([jnp.ones(u.shape) for u in state_init],
+                        jnp.ones((cfg.data.batchsize, *cfg.data.shape)))
+        state = TrainState.from_model(model, dummy_input, opt, model_keys,
+                                      model_state=state_init,
+                                      apply_fn=model.lapply)
+        CustomMetrics = Metrics.with_hsic(len(state.params["params"]))
+        state = state.replace(metrics=CustomMetrics.empty())
+
+        return state
+    if cfg.nmodels > 1:
+        train_state = jax.vmap(init_state)(state_key, init_keys)
+    else:
+        train_state = init_state(state_key, init_keys)
     # create training step
     loss_fn = optax.softmax_cross_entropy
     train_step = create_lif_biohsic_step(loss_fn,
@@ -104,6 +119,9 @@ def main(cfg: DictConfig):
         state = state.replace(metrics=metrics)
 
         return state
+    if cfg.nmodels > 1:
+        train_step = jax.vmap(train_step, in_axes=(0, None, 0))
+        metric_step = jax.vmap(metric_step, in_axes=(0, None, 0))
 
     # create checkpointing utility
     ckpt_opts = CheckpointManagerOptions(

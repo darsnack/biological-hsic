@@ -318,7 +318,7 @@ def create_lif_biohsic_step(loss_fn, gamma, sigmas, ntimesteps):
         kx = kernel_matrix(flatten(xs), sigmax)
         ky = kernel_matrix(flatten(ys), sigmay)
 
-        def step(_, carry):
+        def step(i, carry):
             loss, state = carry
             # apply model forward and compute layerwise vjp along the way
             def _fwd(params):
@@ -342,7 +342,6 @@ def create_lif_biohsic_step(loss_fn, gamma, sigmas, ntimesteps):
                                 for j in range(len(zs))], axis=0)
 
                 return dy
-            # print([z.shape for z in zs.values()])
             dys = {layer: _build_dy(i, zs[layer])
                 for i, layer in enumerate(zs.keys())}
             grads = jax.vmap(vjp_fun)(dys)[0]
@@ -351,15 +350,15 @@ def create_lif_biohsic_step(loss_fn, gamma, sigmas, ntimesteps):
             grads = {"params": grads}
             loss += jnp.mean(loss_fn(list(zs.values())[-1], ys))
 
-            def log(grad_norms):
-                # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
-                wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
-                                            for j, grad_norm_j in enumerate(grad_norm)}
-                        for i, grad_norm in enumerate(grad_norms)}, commit=False)
-            grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
-                           for g in jtu.tree_leaves(gs)]
-                          for gs in grads["params"].values()]
-            jax.debug.callback(log, grad_norms, ordered=True)
+            # def log(grad_norms):
+            #     # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+            #     wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
+            #                                 for j, grad_norm_j in enumerate(grad_norm)}
+            #             for i, grad_norm in enumerate(grad_norms)}, commit=False)
+            # grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
+            #                for g in jtu.tree_leaves(gs)]
+            #               for gs in grads["params"].values()]
+            # jax.debug.callback(log, grad_norms, ordered=True)
 
             # update model
             state = state.apply_gradients(grads=grads)
