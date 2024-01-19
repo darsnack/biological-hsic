@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrng
 import jax.tree_util as jtu
+import flax
 import wandb
 from clu import metrics
 from flax import struct
@@ -87,6 +88,16 @@ class Metrics(metrics.Collection):
             return jax.vmap(lambda m: super(Metrics, m).compute())(self)
         else:
             return super(Metrics, self).compute()
+
+    def reempty(self):
+        devices = list(self.loss.count.devices())
+        if len(devices) > 1:
+            empty_metric = super(Metrics, self).empty()
+            return flax.jax_utils.replicate(empty_metric, devices)
+        elif self.loss.count.ndim > 0:
+            return jax.vmap(lambda m: super(Metrics, m).empty())(self)
+        else:
+            return super(Metrics, self).empty()
 
     def init_history(self):
         return {
@@ -442,7 +453,7 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         # average metrics
         for metric, value in state.metrics.compute().items():
             metric_history["train"][metric].append(value)
-        state = state.replace(metrics=state.metrics.empty())
+        state = state.replace(metrics=state.metrics.reempty())
 
         # run test validation
         if "test" in data.keys():

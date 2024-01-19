@@ -19,6 +19,15 @@ def kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
 
     return kernel
 
+# def kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
+#     if x.ndim == 3:
+#         kx = jax.vmap(_kernel_matrix, in_axes=(2, None, None))(x, sigma, dist_fn)
+#         kx = jnp.mean(kx, axis=2)
+#     else:
+#         kx = _kernel_matrix(x, sigma, dist_fn)
+
+#     return kx
+
 def hsic_bottleneck(x, y, z, gamma, sigma_x, sigma_y, sigma_z):
     # compute kernel matrices
     Kx = kernel_matrix(flatten(x), sigma_x)

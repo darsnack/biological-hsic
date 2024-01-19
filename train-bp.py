@@ -55,8 +55,8 @@ def main(cfg: DictConfig):
     dummy_input = jnp.ones((1, *cfg.data.shape))
     def init_state(keys):
         state = TrainState.from_model(model, dummy_input, opt, keys)
-        CustomMetrics = Metrics.with_hsic(len(state.params["params"]))
-        state = state.replace(metrics=CustomMetrics.empty())
+        # CustomMetrics = Metrics.with_hsic(len(state.params["params"]))
+        # state = state.replace(metrics=CustomMetrics.empty())
 
         return state
     if cfg.nmodels > 1:
@@ -70,15 +70,15 @@ def main(cfg: DictConfig):
     def metric_step(state: TrainState, batch, _ = None):
         xs, ys = batch
         ypreds, acts = model.lapply(state.params, xs, rngs=state.rngs)
-        hsic_losses = {k: hsic_bottleneck(xs, ys, zs, 2, 0.25, 0.1, 1)
-                       for k, zs in acts.items()}
+        # hsic_losses = {k: hsic_bottleneck(xs, ys, zs, 2, 0.25, 0.1, 1)
+        #                for k, zs in acts.items()}
         loss = jnp.mean(loss_fn(ypreds, ys))
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
             loss = loss, accuracy = acc,
-            **{f"hsic{i}": hsic_loss[0] for i, hsic_loss in enumerate(hsic_losses.values())},
-            **{f"hsicx{i}": hsic_loss[1] for i, hsic_loss in enumerate(hsic_losses.values())},
-            **{f"hsicy{i}": hsic_loss[2] for i, hsic_loss in enumerate(hsic_losses.values())},
+            # **{f"hsic{i}": hsic_loss[0] for i, hsic_loss in enumerate(hsic_losses.values())},
+            # **{f"hsicx{i}": hsic_loss[1] for i, hsic_loss in enumerate(hsic_losses.values())},
+            # **{f"hsicy{i}": hsic_loss[2] for i, hsic_loss in enumerate(hsic_losses.values())},
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)
