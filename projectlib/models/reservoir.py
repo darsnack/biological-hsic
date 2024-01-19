@@ -92,13 +92,13 @@ class ReservoirCell(nn.RNNCellBase):
                                  minval=-self.output_noise,
                                  maxval=self.output_noise)
         z = z + xi_output
+        # jax.debug.callback(print, (z[0, :4], xi_output[0, :4]), ordered=True)
 
         # update hidden neuron state
         du = self.recurrent_strength * dense_r(r) + dense_i(x) + dense_f(z)
-        u = self.time_step * (du - u) / self.time_constant
+        u = u + self.time_step * (du - u) / self.time_constant
 
-        return u, xi_output
-
+        return u, z
 
     @staticmethod
     def initialize_carry(rng, batch_dims, size,

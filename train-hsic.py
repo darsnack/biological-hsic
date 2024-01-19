@@ -48,17 +48,19 @@ def main(cfg: DictConfig):
     # create training state (initialize parameters)
     dummy_input = jnp.ones((1, *cfg.data.shape))
     train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
+                                        aux_state=tuple(cfg.hsic.sigmas),
                                         apply_fn=model.lapply)
     CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
     train_state = train_state.replace(metrics=CustomMetrics.empty())
     # create training step
     loss_fn = optax.softmax_cross_entropy
-    train_step = create_hsic_step(loss_fn, cfg.hsic.gamma, cfg.hsic.sigmas)
+    train_step = create_hsic_step(loss_fn, cfg.hsic.gamma)
     @jax.jit
     def metric_step(state: TrainState, batch, _ = None):
         xs, ys = batch
+        sigmas = state.aux_state
         ypreds, acts = state.apply_fn(state.params, xs, rngs=state.rngs)
-        hsic_losses = {k: hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *cfg.hsic.sigmas)
+        hsic_losses = {k: hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *sigmas)
                        for k, zs in acts.items()}
         # pass input through model storing local grads along the way
         loss = jnp.mean(loss_fn(ypreds, ys))

@@ -90,11 +90,13 @@ class TrainState(train_state.TrainState):
     metrics: Metrics
     rngs: Dict[str, Array]
     model_state: Any
+    aux_state: Any
 
     @classmethod
     def from_model(cls, model, dummy_input, opt, rngs,
                    param_init = None,
                    model_state = None,
+                   aux_state = None,
                    metrics = None,
                    apply_fn = None):
         _init = maybe(param_init, model.init)
@@ -108,6 +110,7 @@ class TrainState(train_state.TrainState):
         return cls.create(apply_fn=apply_fn,
                           params=params,
                           model_state=model_state,
+                          aux_state=aux_state,
                           tx=opt,
                           rngs=rngs,
                           metrics=metrics)
@@ -133,24 +136,18 @@ class LowPassFilter:
 
         return (1 - tau) * xavg + tau * x
 
-def create_rmhebb_step(ntimesteps, gamma, sigmas, gain, lpf: LowPassFilter):
+def create_rmhebb_step(ntimesteps, lpf: LowPassFilter):
     @jax.jit
     def rmhebb_step(state: TrainState, batch, _ = None):
-        # compute global error signal
-        xs, ys, zs = batch
-        sigmax, sigmay, sigmaz = sigmas
-        kx = kernel_matrix(xs, sigmax)
-        ky = kernel_matrix(ys, sigmay)
-        kz = kernel_matrix(zs, sigmaz)
-        xi = gain * global_error(kx, ky, kz, zs, gamma, sigmaz)
-        xi = jnp.expand_dims(xi, axis=0)
+        xs = batch[0]
         # compute input signal
-        inputs = jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=-1)
-        inputs = jnp.expand_dims(inputs, axis=0)
+        inputs = jnp.expand_dims(xs[-1], axis=0)
+        # compute target signal
+        targets = jnp.reshape(xs, (1, -1))
 
         # define each time step
         def step(_, carry):
-            losses, train_state, lpf_state = carry
+            losses, train_state = carry
             # run reservoir forward
             train_state = train_state.split_rngs()
             (model_state, outputs), aux = train_state.apply_fn(
@@ -161,31 +158,31 @@ def create_rmhebb_step(ntimesteps, gamma, sigmas, gain, lpf: LowPassFilter):
             rs = aux["intermediates"]["rstore"][0]
             train_state = train_state.replace(model_state=model_state)
             # update LPF value
-            lpf_errors, lpf_outputs = lpf_state
-            errors = -jnp.sum((outputs - xi) ** 2)
+            lpf_errors, lpf_outputs = train_state.aux_state
+            errors = -jnp.sum((outputs - targets) ** 2)
             lpf_errors = lpf(lpf_errors, errors)
             lpf_outputs = lpf(lpf_outputs, outputs)
+            train_state = train_state.replace(aux_state=(lpf_errors, lpf_outputs))
             # compute and apply update
             # reward = jax.lax.convert_element_type(errors > lpf_errors, jnp.int_)
             reward = errors > lpf_errors
-            dW = reward * (lpf_outputs - outputs) * jnp.transpose(rs)
+            dW = (outputs - targets) * jnp.transpose(rs)
+            # jax.debug.callback(print, reward, ordered=True)
             dWkey = ("params", "o", "kernel")
-            grads = freeze(path_aware_map(
+            grads = path_aware_map(
                 lambda k, v: dW if k == dWkey else jnp.zeros_like(v),
                 train_state.params
-            ))
+            )
             train_state = train_state.apply_gradients(grads=grads)
             # compute loss
-            losses += -errors / jnp.size(xi)
+            losses += -errors / jnp.size(targets)
 
-            return losses, train_state, (lpf_errors, lpf_outputs)
+            return losses, train_state
 
         # run over batch for ntimesteps
-        losses = jnp.zeros_like(xi, shape=())
-        lpf_errors = jnp.zeros_like(xi, shape=())
-        lpf_outputs = jnp.zeros_like(xi)
-        init_carry = (losses, state, (lpf_errors, lpf_outputs))
-        losses, state, _ = jax.lax.fori_loop(0, ntimesteps, step, init_carry)
+        losses = jnp.zeros_like(targets, shape=())
+        init_carry = (losses, state)
+        losses, state = jax.lax.fori_loop(0, ntimesteps, step, init_carry)
         # carry = init_carry
         # for i in range(ntimesteps):
         #     carry = step(i, carry)
@@ -206,10 +203,11 @@ def clip_grad_norm(gs, max_norm):
 
     return jtu.tree_map(normalize, gs)
 
-def create_hsic_step(loss_fn, gamma, sigmas):
+def create_hsic_step(loss_fn, gamma):
     @jax.jit
     def train_step(state: TrainState, batch, _ = None):
         xs, ys = batch
+        sigmas = state.aux_state
         # apply model forward and compute layerwise gradients along the way
         def compute_loss(params):
             _, acts = state.apply_fn(params, xs, rngs=state.rngs)
@@ -235,6 +233,7 @@ def create_hsic_step(loss_fn, gamma, sigmas):
         # update model
         # grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), grads)
         state = state.apply_gradients(grads=grads)
+        # state = state.replace(aux_state=(0.9 * sigmas[0], 0.9 * sigmas[1], sigmas[2]))
 
         return losses[-1], state
 

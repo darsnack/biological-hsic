@@ -31,7 +31,7 @@ def hsic_bottleneck(x, y, z, gamma, sigma_x, sigma_y, sigma_z):
     hsic_x = jnp.trace(Kx @ H @ Kz @ H) / ((nsamples - 1) ** 2)
     hsic_y = jnp.trace(Ky @ H @ Kz @ H) / ((nsamples - 1) ** 2)
 
-    return hsic_x - gamma * hsic_y, hsic_x, hsic_y
+    return (1 - gamma) * hsic_x - gamma * hsic_y, hsic_x, hsic_y
 
 def global_error(kx, ky, kz, z, gamma, sigma):
     kx_bar = kx - jnp.mean(kx, axis=1)
