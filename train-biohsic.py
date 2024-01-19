@@ -5,10 +5,9 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 
 import jax
 import jax.numpy as jnp
+import jax.random as jrng
 import tensorflow as tf
-import tensorflow_datasets as tfds
 import optax
-import seaborn as sns
 import hydra
 from omegaconf import DictConfig
 from orbax.checkpoint import (CheckpointManager,
@@ -26,7 +25,11 @@ def main(cfg: DictConfig):
     jax.config.update("jax_default_device", jax.devices()[cfg.gpu])
 
     # setup rngs
-    rngs = setup_rngs(cfg.seed)
+    if cfg.nmodels > 1:
+        seeds = jrng.split(jrng.PRNGKey(cfg.seed), cfg.nmodels)
+        rngs = jax.vmap(setup_rngs)(seeds)
+    else:
+        rngs = setup_rngs(cfg.seed)
     # initialize randomness
     tf.random.set_seed(cfg.seed) # deterministic data iteration
 
@@ -51,10 +54,17 @@ def main(cfg: DictConfig):
     opt = instantiate_optimizer(cfg.optimizer, len(train_loader))
     # create training state (initialize parameters)
     dummy_input = jnp.ones((1, *cfg.data.shape))
-    train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
+    def init_state(keys):
+        state = TrainState.from_model(model, dummy_input, opt, keys,
                                         apply_fn=model.lapply)
-    CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
-    train_state = train_state.replace(metrics=CustomMetrics.empty())
+        CustomMetrics = Metrics.with_hsic(len(state.params["params"]))
+        state = state.replace(metrics=CustomMetrics.empty())
+
+        return state
+    if cfg.nmodels > 1:
+        train_state = jax.vmap(init_state)(init_keys)
+    else:
+        train_state = init_state(init_keys)
     # create training step
     loss_fn = optax.softmax_cross_entropy
     train_step = create_biohsic_step(loss_fn, cfg.hsic.gamma, cfg.hsic.sigmas)
@@ -77,6 +87,9 @@ def main(cfg: DictConfig):
         state = state.replace(metrics=metrics)
 
         return state
+    if cfg.nmodels > 1:
+        train_step = jax.vmap(train_step, in_axes=(0, None, 0))
+        metric_step = jax.vmap(metric_step, in_axes=(0, None, 0))
 
     # create checkpointing utility
     ckpt_opts = CheckpointManagerOptions(
@@ -114,11 +127,5 @@ if __name__ == "__main__":
     # prevent TF from using the GPU
     tf.config.experimental.set_visible_devices([], "GPU")
 
-    # set seaborn config
-    sns.set_theme(context="notebook",
-                  font_scale=1.125,
-                  style="ticks",
-                  palette="Set2",
-                  rc={"figure.dpi": 600})
     # run training
     main()

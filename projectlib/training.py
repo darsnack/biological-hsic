@@ -80,6 +80,14 @@ class Metrics(metrics.Collection):
                for i in range(nlayers)}
         )
 
+    def compute(self):
+        if len(self.loss.count.devices()) > 1:
+            return super(Metrics, self.unreplicate()).compute()
+        elif self.loss.count.ndim > 0:
+            return jax.vmap(lambda m: super(Metrics, m).compute())(self)
+        else:
+            return super(Metrics, self).compute()
+
     def init_history(self):
         return {
             "train": {k: [] for k in self.__annotations__.keys()},
@@ -272,15 +280,15 @@ def create_biohsic_step(loss_fn, gamma, sigmas):
         grads = {"params": grads}
         loss = jnp.mean(loss_fn(list(zs.values())[-1], ys))
 
-        grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
-                       for g in jtu.tree_leaves(gs)]
-                      for gs in grads["params"].values()]
-        def log(grad_norms):
-            # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
-            wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
-                                         for j, grad_norm_j in enumerate(grad_norm)}
-                       for i, grad_norm in enumerate(grad_norms)}, commit=False)
-        jax.debug.callback(log, grad_norms, ordered=True)
+        # grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
+        #                for g in jtu.tree_leaves(gs)]
+        #               for gs in grads["params"].values()]
+        # def log(grad_norms):
+        #     # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+        #     wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
+        #                                  for j, grad_norm_j in enumerate(grad_norm)}
+        #                for i, grad_norm in enumerate(grad_norms)}, commit=False)
+        # jax.debug.callback(log, grad_norms, ordered=True)
 
         # update model
         state = state.apply_gradients(grads=grads)
@@ -402,13 +410,29 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
     metric_history = state.metrics.init_history()
     rng = maybe(rng, jrng.PRNGKey(0))
 
+    # vmap helpers for multiple parallel models
+    if rng.ndim > 1:
+        def rng_split(key, n = 2):
+            splits = jax.vmap(jrng.split, in_axes=(0, None))(key, n)
+            return tuple(splits[:, i, :] for i in range(n))
+
+        @jax.vmap
+        def split_state_rngs(state):
+            return state.split_rngs()
+    else:
+        def rng_split(key, n = 2):
+            return jrng.split(key, n)
+
+        def split_state_rngs(state):
+            return state.split_rngs()
+
     epoch_len = len(data["train"])
     for epoch in range(nepochs):
         # run epoch
         for i, batch in enumerate(data["train"].as_numpy_iterator()):
             batch = batch_values(batch)
-            rng, rng_step, rng_metric = jrng.split(rng, 3)
-            state = state.split_rngs()
+            rng, rng_step, rng_metric = rng_split(rng, 3)
+            state = split_state_rngs(state)
             loss, state = step_fn(state, batch, rng_step)
             state = metrics_fn(state, batch, rng_metric)
             if (step_log_interval is not None) and (i % step_log_interval == 0):
@@ -425,8 +449,8 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
             test_state = state
             for i, batch in enumerate(data["test"].as_numpy_iterator()):
                 batch = batch_values(batch)
-                rng, rng_metric = jrng.split(rng)
-                test_state = test_state.split_rngs()
+                rng, rng_metric = rng_split(rng)
+                test_state = split_state_rngs(test_state)
                 test_state = metrics_fn(test_state, batch, rng_metric)
 
             # average metrics
