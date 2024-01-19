@@ -38,15 +38,15 @@ def main(cfg: DictConfig):
 
     # setup dataloaders
     # xdata_key, ydata_key, zdata_key = jrng.split(rngs["data"], 3)
-    # xdata = jrng.uniform(rngs["data"], (cfg.data.nsamples, cfg.data.dim))
+    xdata = jrng.uniform(rngs["data"], (cfg.data.nsamples, cfg.data.dim))
     # ydata = jrng.uniform(ydata_key, (cfg.data.nsamples, cfg.data.ydim))
     # zdata = jrng.uniform(zdata_key, (cfg.data.nsamples, cfg.data.zdim))
-    f = 2 * jnp.pi * jnp.arange(1, cfg.data.dim + 1)
-    t = jnp.arange(cfg.data.nsamples) / (2 * f[-1])
-    xdata = 0.5 * jnp.sin(jnp.expand_dims(f, axis=0) * jnp.expand_dims(t, axis=1))
+    # f = 2 * jnp.pi * jnp.arange(1, cfg.data.dim + 1)
+    # t = jnp.arange(cfg.data.nsamples) / (2 * f[-1])
+    # xdata = 0.5 * jnp.sin(jnp.expand_dims(f, axis=0) * jnp.expand_dims(t, axis=1))
     loader = build_dataloader({"x": xdata},
                               batch_size=cfg.data.batchsize,
-                              shuffle=False,
+                            #   shuffle=False,
                               window_shift=1)
 
     # setup model
