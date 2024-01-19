@@ -8,7 +8,7 @@ defaults:
 
 data: ???
 seed: 42
-nmodels: 10
+nmodels: 30
 checkpointing:
   path: checkpoints
   rate: 50 # in epochs

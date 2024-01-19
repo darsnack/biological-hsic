@@ -86,14 +86,14 @@ def load_dataset(dataset):
                          jnp.array([[0, 0], [0, 1], [1, 0], [1, 1]]),
                          (1000,))
         ys = jnp.logical_xor(xs[:, 0], xs[:, 1]).astype(jnp.int32)
-        xs_noisy = xs + jrng.normal(noise_key, xs.shape) * 0.01
+        xs_noisy = xs + jrng.normal(noise_key, xs.shape) * 0.1
 
         return {"train": {"input": xs_noisy[:900], "label": ys[:900]},
                 "test": {"input": xs_noisy[900:], "label": ys[900:]}}
     elif dataset == "linear":
         xs = jrng.uniform(jrng.PRNGKey(42), (1000, 2),
                           minval=-1, maxval=1)
-        w = jrng.normal(jrng.PRNGKey(43), (2,))
+        w = jrng.normal(jrng.PRNGKey(24), (2,))
         ys = (xs @ w > 0).astype(jnp.int32)
 
         return {"train": {"input": xs[:900], "label": ys[:900]},

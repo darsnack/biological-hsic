@@ -436,6 +436,31 @@ def fit(data, state: TrainState, step_fn, metrics_fn,
         def split_state_rngs(state):
             return state.split_rngs()
 
+    # evaluate initial train metrics
+    test_state = state
+    for i, batch in enumerate(data["train"].as_numpy_iterator()):
+        batch = batch_values(batch)
+        rng, rng_metric = rng_split(rng)
+        test_state = split_state_rngs(test_state)
+        test_state = metrics_fn(test_state, batch, rng_metric)
+    # average metrics
+    for metric, value in test_state.metrics.compute().items():
+        metric_history["train"][metric].append(value)
+    # evaluate initial test metrics
+    if "test" in data.keys():
+        test_state = state
+        for i, batch in enumerate(data["test"].as_numpy_iterator()):
+            batch = batch_values(batch)
+            rng, rng_metric = rng_split(rng)
+            test_state = split_state_rngs(test_state)
+            test_state = metrics_fn(test_state, batch, rng_metric)
+        # average metrics
+        for metric, value in test_state.metrics.compute().items():
+            metric_history["test"][metric].append(value)
+    # save initial metrics
+    ckpt = {"train_state": state, "metrics_history": metric_history}
+    save_fn(0, ckpt, force=True)
+
     epoch_len = len(data["train"])
     for epoch in range(nepochs):
         # run epoch
