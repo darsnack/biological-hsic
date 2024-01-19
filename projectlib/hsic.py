@@ -11,7 +11,7 @@ def sq_euclidean_dist(x, y):
 def rbf_kernel(x, sigma):
     return jnp.exp(x / (-2 * sigma ** 2))
 
-def kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
+def _kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
     pairwise_dist_fn = jax.vmap(jax.vmap(dist_fn, (0, None)), (None, 0))
     distances = pairwise_dist_fn(x, x)
     sigma = sigma * jnp.sqrt(x.shape[-1])
@@ -19,20 +19,22 @@ def kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
 
     return kernel
 
-# def kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
-#     if x.ndim == 3:
-#         kx = jax.vmap(_kernel_matrix, in_axes=(2, None, None))(x, sigma, dist_fn)
-#         kx = jnp.mean(kx, axis=2)
-#     else:
-#         kx = _kernel_matrix(x, sigma, dist_fn)
+def kernel_matrix(x, sigma, dist_fn = sq_euclidean_dist):
+    if x.ndim == 4:
+        # x = jnp.reshape(x, (x.shape[0], -1, x.shape[-1]))
+        # kx = jax.vmap(_kernel_matrix, in_axes=(2, None, None))(x, sigma, dist_fn)
+        # kx = jnp.mean(kx, axis=0)
+        kx = _kernel_matrix(flatten(x), sigma, dist_fn)
+    else:
+        kx = _kernel_matrix(x, sigma, dist_fn)
 
-#     return kx
+    return kx
 
 def hsic_bottleneck(x, y, z, gamma, sigma_x, sigma_y, sigma_z):
     # compute kernel matrices
-    Kx = kernel_matrix(flatten(x), sigma_x)
-    Ky = kernel_matrix(flatten(y), sigma_y)
-    Kz = kernel_matrix(flatten(z), sigma_z)
+    Kx = kernel_matrix(x, sigma_x)
+    Ky = kernel_matrix(y, sigma_y)
+    Kz = kernel_matrix(z, sigma_z)
     # normalization matrix
     nsamples = x.shape[0]
     H = jnp.identity(nsamples) - jnp.ones((nsamples, nsamples)) / nsamples
@@ -40,7 +42,7 @@ def hsic_bottleneck(x, y, z, gamma, sigma_x, sigma_y, sigma_z):
     hsic_x = jnp.trace(Kx @ H @ Kz @ H) / ((nsamples - 1) ** 2)
     hsic_y = jnp.trace(Ky @ H @ Kz @ H) / ((nsamples - 1) ** 2)
 
-    return (1 - gamma) * hsic_x - gamma * hsic_y, hsic_x, hsic_y
+    return hsic_x - gamma * hsic_y, hsic_x, hsic_y
 
 def global_error(kx, ky, kz, z, gamma, sigma):
     kx_bar = kx - jnp.mean(kx, axis=1)

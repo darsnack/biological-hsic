@@ -5,4 +5,4 @@ optimizer:
 training:
   nepochs: 50
 data:
-  batchsize: 256
+  batchsize: 16

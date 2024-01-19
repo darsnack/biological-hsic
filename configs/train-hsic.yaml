@@ -1,12 +1,12 @@
 defaults:
 - common
+- data: mnist
 - model: mlp
 - optimizer: adamw
 - _self_
 - optional data_model: ${data}_${model}
 - optional data_task/train-hsic: ${data}
 
-data: ???
 seed: 42
 nmodels: 30
 checkpointing:
