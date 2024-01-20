@@ -50,8 +50,8 @@ def main(cfg: DictConfig):
     train_state = TrainState.from_model(model, dummy_input, opt, init_keys,
                                         aux_state=tuple(cfg.hsic.sigmas),
                                         apply_fn=model.lapply)
-    CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
-    train_state = train_state.replace(metrics=CustomMetrics.empty())
+    # CustomMetrics = Metrics.with_hsic(len(train_state.params["params"]))
+    # train_state = train_state.replace(metrics=CustomMetrics.empty())
     # create training step
     loss_fn = optax.softmax_cross_entropy
     train_step = create_hsic_step(loss_fn, cfg.hsic.gamma)
@@ -60,16 +60,16 @@ def main(cfg: DictConfig):
         xs, ys = batch
         sigmas = state.aux_state
         ypreds, acts = state.apply_fn(state.params, xs, rngs=state.rngs)
-        hsic_losses = {k: hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *sigmas)
-                       for k, zs in acts.items()}
+        # hsic_losses = {k: hsic_bottleneck(xs, ys, zs, cfg.hsic.gamma, *sigmas)
+        #                for k, zs in acts.items()}
         # pass input through model storing local grads along the way
         loss = jnp.mean(loss_fn(ypreds, ys))
         acc = jnp.mean(jnp.argmax(ypreds, axis=-1) == jnp.argmax(ys, axis=-1))
         metrics_updates = state.metrics.single_from_model_output(
             loss=loss, accuracy=acc,
-            **{f"hsic{i}": hsic_loss[0] for i, hsic_loss in enumerate(hsic_losses.values())},
-            **{f"hsicx{i}": hsic_loss[1] for i, hsic_loss in enumerate(hsic_losses.values())},
-            **{f"hsicy{i}": hsic_loss[2] for i, hsic_loss in enumerate(hsic_losses.values())},
+            # **{f"hsic{i}": hsic_loss[0] for i, hsic_loss in enumerate(hsic_losses.values())},
+            # **{f"hsicx{i}": hsic_loss[1] for i, hsic_loss in enumerate(hsic_losses.values())},
+            # **{f"hsicy{i}": hsic_loss[2] for i, hsic_loss in enumerate(hsic_losses.values())},
         )
         metrics = state.metrics.merge(metrics_updates)
         state = state.replace(metrics=metrics)
