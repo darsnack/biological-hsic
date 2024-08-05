@@ -1,6 +1,21 @@
 # Information Bottleneck-Based Hebbian Learning Rule Naturally Ties Working Memory and Synaptic Updates
 
 A biologically plausible implementation of the HSIC objective.
+Please cite our work if you use this codebase for research purposes:
+```bibtex
+@article{10.3389/fncom.2024.1240348,
+	author = {Daruwalla, Kyle and Lipasti, Mikko},
+	doi = {10.3389/fncom.2024.1240348},
+	issn = {1662-5188},
+	journal = {Frontiers in Computational Neuroscience},
+	title = {Information bottleneck-based Hebbian learning rule naturally ties working memory and synaptic updates},
+	url = {https://www.frontiersin.org/journals/computational-neuroscience/articles/10.3389/fncom.2024.1240348},
+	volume = {18},
+	year = {2024},
+	bdsk-url-1 = {https://www.frontiersin.org/journals/computational-neuroscience/articles/10.3389/fncom.2024.1240348},
+	bdsk-url-2 = {https://doi.org/10.3389/fncom.2024.1240348}
+}
+```
 
 ## Setup instructions
 
