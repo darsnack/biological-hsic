@@ -160,6 +160,8 @@ def create_rmhebb_step(ntimesteps, gamma, sigma):
     def rmhebb_step(state: TrainState, batch, _ = None):
         # compute global error signal
         xs, ys, zs = batch
+        xs = flatten(xs)
+        ys = flatten(ys)
         # compute input signal
         inputs = jnp.expand_dims(jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=0), axis=0)
         # compute target signal

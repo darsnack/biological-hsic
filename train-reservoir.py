@@ -17,8 +17,8 @@ from orbax.checkpoint import (CheckpointManager,
                               CheckpointManagerOptions,
                               PyTreeCheckpointer)
 
-from projectlib.utils import setup_rngs, instantiate_optimizer
-from projectlib.data import build_dataloader
+from projectlib.utils import setup_rngs, instantiate_optimizer, flatten
+from projectlib.data import build_dataloader, load_dataset, default_data_transforms
 from projectlib.models.reservoir import ReservoirCell
 from projectlib.hsic import kernel_matrix, global_error
 from projectlib.training import (TrainState,
@@ -37,8 +37,14 @@ def main(cfg: DictConfig):
 
     # setup dataloaders
     xdata_key, ydata_key, zdata_key = jrng.split(rngs["data"], 3)
-    xdata = jrng.uniform(xdata_key, (cfg.data.nsamples, cfg.data.xdim))
-    ydata = jrng.uniform(ydata_key, (cfg.data.nsamples, cfg.data.ydim))
+    data = load_dataset("mnist")
+    data = data["test"].take(cfg.data.nsamples)
+    data = build_dataloader(data, batch_transform=default_data_transforms("mnist"))
+    data = [sample for sample in data.as_numpy_iterator()]
+    xdata = jnp.stack([sample["image"] for sample in data])
+    ydata = jnp.stack([sample["label"] for sample in data])
+    # xdata = jrng.uniform(xdata_key, (cfg.data.nsamples, cfg.data.xdim))
+    # ydata = jrng.uniform(ydata_key, (cfg.data.nsamples, cfg.data.ydim))
     zdata = jrng.uniform(zdata_key, (cfg.data.nsamples, cfg.data.zdim))
     # f = 2 * jnp.pi * jnp.arange(1, cfg.data.dim + 1)
     # t = jnp.arange(cfg.data.nsamples) / (2 * f[-1])
@@ -70,7 +76,7 @@ def main(cfg: DictConfig):
                                                 size=cfg.model.nhidden)
     dummy_input = (jnp.ones(state_init.shape),
                    jnp.ones((1, cfg.data.ntimesteps,
-                             cfg.data.xdim + cfg.data.ydim + cfg.data.zdim)))
+                             784 + 10 + cfg.data.zdim)))
     _Metrics = Metrics.with_aux(
         target=TraceMetric.from_output("target",
                                       (cfg.data.ntimesteps, cfg.data.zdim)),
@@ -87,6 +93,8 @@ def main(cfg: DictConfig):
     def metric_step(state: TrainState, batch, _ = None):
         # compute global error signal
         xs, ys, zs = batch
+        xs = flatten(xs)
+        ys = flatten(ys)
         # compute input signal
         inputs = jnp.expand_dims(jnp.concatenate([xs[-1], ys[-1], zs[-1]], axis=0), axis=0)
         # compute target signal
