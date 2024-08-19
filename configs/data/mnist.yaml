@@ -1,3 +1,4 @@
 dataset: mnist
 batchsize: 6
+test_batchsize: 256
 shape: [28, 28, 1]
