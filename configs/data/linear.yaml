@@ -1,3 +1,4 @@
 dataset: linear
 batchsize: 10
+test_batchsize: 100
 shape: [2]

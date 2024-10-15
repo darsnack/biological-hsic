@@ -1,3 +1,4 @@
 dataset: cifar10
 batchsize: 6
+test_batchsize: 256
 shape: [32, 32, 3]

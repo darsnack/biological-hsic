@@ -43,7 +43,7 @@ def main(cfg: DictConfig):
                                     batch_size=cfg.data.batchsize)
     test_loader = build_dataloader(data["test"],
                                    batch_transform=preprocess_fn,
-                                   batch_size=cfg.data.batchsize)
+                                   batch_size=cfg.data.test_batchsize)
 
     # setup model
     model = hydra.utils.instantiate(cfg.model)
