@@ -39,7 +39,7 @@ def main(cfg: DictConfig):
     xdata_key, ydata_key, zdata_key = jrng.split(rngs["data"], 3)
     data = load_dataset("mnist")
     data = data["test"].take(cfg.data.nsamples)
-    data = build_dataloader(data, batch_transform=default_data_transforms("mnist"))
+    data = build_dataloader(data, batch_transform=default_data_transforms("mnist", "train"))
     data = [sample for sample in data.as_numpy_iterator()]
     xdata = jnp.stack([sample["image"] for sample in data])
     ydata = jnp.stack([sample["label"] for sample in data])

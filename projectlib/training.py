@@ -237,15 +237,15 @@ def create_hsic_step(loss_fn, gamma):
             return hsic_losses
         losses, grads = lvalue_and_grad(compute_loss)(state.params)
 
-        grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
-                       for g in jtu.tree_leaves(gs)]
-                      for gs in grads["params"].values()]
-        def log(grad_norms):
-            # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
-            wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
-                                         for j, grad_norm_j in enumerate(grad_norm)}
-                       for i, grad_norm in enumerate(grad_norms)}, commit=False)
-        jax.debug.callback(log, grad_norms, ordered=True)
+        # grad_norms = [[jnp.linalg.norm(jnp.reshape(g, -1))
+        #                for g in jtu.tree_leaves(gs)]
+        #               for gs in grads["params"].values()]
+        # def log(grad_norms):
+        #     # wandb.log({"zs": wandb.Histogram(zs)}, commit=False)
+        #     wandb.log({f"gradnorm_{i}": {str(j): grad_norm_j
+        #                                  for j, grad_norm_j in enumerate(grad_norm)}
+        #                for i, grad_norm in enumerate(grad_norms)}, commit=False)
+        # jax.debug.callback(log, grad_norms, ordered=True)
 
         # update model
         # grads = jtu.tree_map(lambda g: jnp.clip(g, -1, 1), grads)

@@ -101,7 +101,7 @@ def load_dataset(dataset):
     else:
         return tfds.load(dataset)
 
-def default_data_transforms(dataset):
+def default_data_transforms(dataset, stage):
     if dataset == "xor":
         return PreprocessFn([ToFloat(name="input"), OneHot(2)], only_jax_types=True)
     elif dataset == "linear":
@@ -113,12 +113,15 @@ def default_data_transforms(dataset):
         return PreprocessFn([ToFloat(), Standardize((0.5,), (0.5,)), OneHot(10)],
                             only_jax_types=True)
     elif dataset == "cifar10":
-        return PreprocessFn([RandomCrop((32, 32), (2, 2)),
-                             RandomHFlip(),
-                             ToFloat(),
-                             Standardize((0.4914, 0.4822, 0.4465),
-                                         (0.247, 0.243, 0.261)),
-                             OneHot(10)], only_jax_types=True)
+        if stage == "train":
+            augmentations = [RandomCrop((32, 32), (2, 2)), RandomHFlip()]
+        else:
+            augmentations = []
+        preprocessing = [ToFloat(),
+                         Standardize((0.4914, 0.4822, 0.4465),
+                                     (0.247, 0.243, 0.261)),
+                         OneHot(10)]
+        return PreprocessFn(augmentations + preprocessing, only_jax_types=True)
     else:
         return None
 
