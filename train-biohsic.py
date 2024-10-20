@@ -35,13 +35,14 @@ def main(cfg: DictConfig):
 
     # setup dataloaders
     data = load_dataset(cfg.data.dataset)
-    preprocess_fn = default_data_transforms(cfg.data.dataset)
+    train_preprocess_fn = default_data_transforms(cfg.data.dataset, "train")
     train_loader = build_dataloader(data["train"],
-                                    batch_transform=preprocess_fn,
+                                    batch_transform=train_preprocess_fn,
                                     batch_size=cfg.data.batchsize,
                                     window_shift=1)
+    test_preprocess_fn = default_data_transforms(cfg.data.dataset, "test")
     test_loader = build_dataloader(data["test"],
-                                   batch_transform=preprocess_fn,
+                                   batch_transform=test_preprocess_fn,
                                    batch_size=cfg.data.test_batchsize)
 
     # setup model
@@ -56,7 +57,7 @@ def main(cfg: DictConfig):
     dummy_input = jnp.ones((1, *cfg.data.shape))
     def init_state(keys):
         state = TrainState.from_model(model, dummy_input, opt, keys,
-                                        apply_fn=model.lapply)
+                                      apply_fn=model.lapply)
         # CustomMetrics = Metrics.with_hsic(len(state.params["params"]))
         # state = state.replace(metrics=CustomMetrics.empty())
 
