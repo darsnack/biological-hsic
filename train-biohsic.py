@@ -57,7 +57,7 @@ def main(cfg: DictConfig):
     dummy_input = jnp.ones((1, *cfg.data.shape))
     def init_state(keys):
         state = TrainState.from_model(model, dummy_input, opt, keys,
-                                        apply_fn=model.lapply)
+                                      apply_fn=model.lapply)
         # CustomMetrics = Metrics.with_hsic(len(state.params["params"]))
         # state = state.replace(metrics=CustomMetrics.empty())
 
