@@ -53,7 +53,7 @@ def global_error(kx, ky, kz, z, gamma, sigma):
     N = alpha.shape[0] # samples in batch
     alpha_bar = jnp.sum(alpha[:-1], axis=0) / N
     kxky = grow_to(kx_bar - gamma * ky_bar, alpha.ndim + 1)
-    xi = (jnp.trace(kxky[:-1, :-1] * alpha[-1] / N) +
+    xi = (jnp.trace(kxky[:-1, :-1] * alpha[:-1] / N) +
           kxky[-1, -1] * alpha_bar) / ((N - 1) ** 2)
 
     return grow_dims(xi, before=1, after=0) # add batch dim back
